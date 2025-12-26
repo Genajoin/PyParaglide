@@ -997,7 +997,7 @@ function loadFlights(decodedJson)
             map.removeLayer(g_flightsLayer);
     }
 
-	var area = L.rectangle([[42.5, 3.5], [49.5, 18.5]], {color: "#000000", weight: 1., fill: false, opacity:0.5});
+	var area = L.rectangle([[42.5, 3.5], [52.0, 50.0]], {color: "#000000", weight: 1., fill: false, opacity:0.5});
 	var flightsLayers = [area];
 
 	for (f=0; f<flights.length; f++)
@@ -2527,7 +2527,7 @@ function drawAnalysisData(content)
         const lat = obj.analysis[cell].coords.lat;
         const lon = obj.analysis[cell].coords.lon;
 
-        if (lon < 5.0 || lon > 18.0 || lat < 43.0 || lat > 49.0)
+        if (lon < 5.0 || lon > 50.0 || lat < 43.0 || lat > 52.0)
             continue;
 
 
