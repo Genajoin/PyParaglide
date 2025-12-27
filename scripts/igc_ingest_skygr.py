@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 import argparse
 import hashlib
+import math
 import os
 import random
 import re
 import signal
+import socket
 import sqlite3
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
 
 try:
@@ -19,6 +21,15 @@ try:
 except Exception as exc:
     print("ERROR: requests is required to run this script", file=sys.stderr)
     raise
+
+try:
+    import psycopg  # type: ignore
+except Exception:
+    psycopg = None
+try:
+    import urllib3.util.connection as urllib3_connection  # type: ignore
+except Exception:
+    urllib3_connection = None
 
 
 BASE_URL_DEFAULT = "https://www.sky.gr/"
@@ -80,7 +91,7 @@ class RateLimiter:
         self._last_time = time.time()
 
 
-SCHEMA = """
+SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS flights (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     source TEXT NOT NULL,
@@ -95,6 +106,7 @@ CREATE TABLE IF NOT EXISTS flights (
     error_msg TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
     downloaded_at TEXT,
+    updated_at TEXT,
     flight_date TEXT,
     pilot TEXT,
     glider TEXT,
@@ -134,41 +146,145 @@ CREATE TABLE IF NOT EXISTS crawl_state_list (
 CREATE INDEX IF NOT EXISTS idx_crawl_state_list_year ON crawl_state_list(year);
 """
 
+PG_SCHEMA = """
+CREATE TABLE IF NOT EXISTS flights (
+    id BIGSERIAL PRIMARY KEY,
+    source TEXT NOT NULL,
+    flight_id TEXT NOT NULL,
+    show_url TEXT,
+    igc_url TEXT,
+    igc_path TEXT,
+    file_size INTEGER,
+    sha256 TEXT,
+    duplicate_of TEXT,
+    status TEXT NOT NULL,
+    error_msg TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    downloaded_at TEXT,
+    updated_at TEXT,
+    flight_date TEXT,
+    pilot TEXT,
+    glider TEXT,
+    glider_class TEXT,
+    takeoff_lat DOUBLE PRECISION,
+    takeoff_lon DOUBLE PRECISION,
+    takeoff_name TEXT,
+    duration_sec INTEGER,
+    distance_km DOUBLE PRECISION,
+    score DOUBLE PRECISION,
+    track_points INTEGER,
+    has_baro_alt INTEGER,
+    has_gps_alt INTEGER
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flights_source_id ON flights(source, flight_id);
+CREATE INDEX IF NOT EXISTS idx_flights_status ON flights(status);
+CREATE INDEX IF NOT EXISTS idx_flights_flight_date ON flights(flight_date);
+CREATE INDEX IF NOT EXISTS idx_flights_sha256 ON flights(sha256);
 
-def ensure_db(conn: sqlite3.Connection) -> None:
-    conn.executescript(SCHEMA)
-    conn.commit()
-    ensure_columns(conn)
+CREATE TABLE IF NOT EXISTS crawl_state (
+    source TEXT PRIMARY KEY,
+    list_url TEXT,
+    next_list_url TEXT,
+    last_seen_flight_id TEXT,
+    updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS crawl_state_list (
+    source TEXT NOT NULL,
+    list_key TEXT NOT NULL,
+    list_url TEXT,
+    next_list_url TEXT,
+    last_seen_flight_id TEXT,
+    year INTEGER,
+    updated_at TEXT,
+    PRIMARY KEY (source, list_key)
+);
+CREATE INDEX IF NOT EXISTS idx_crawl_state_list_year ON crawl_state_list(year);
+"""
 
 
-def ensure_columns(conn: sqlite3.Connection) -> None:
-    cur = conn.execute("PRAGMA table_info(flights)")
-    columns = {row[1] for row in cur.fetchall()}
-    if "duplicate_of" not in columns:
-        conn.execute("ALTER TABLE flights ADD COLUMN duplicate_of TEXT")
-        conn.commit()
+class Db:
+    def __init__(self, conn: Any, kind: str) -> None:
+        self.conn = conn
+        self.kind = kind
+
+    def execute(self, sql: str, params: Tuple[Any, ...] = ()) -> Any:
+        if self.kind == "postgres":
+            sql = sql.replace("?", "%s")
+        return self.conn.execute(sql, params)
+
+    def executescript(self, script: str) -> None:
+        if self.kind == "sqlite":
+            self.conn.executescript(script)
+            return
+        for stmt in script.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                self.conn.execute(stmt)
+
+    def commit(self) -> None:
+        self.conn.commit()
+
+    def close(self) -> None:
+        self.conn.close()
 
 
-def db_upsert_flight_stub(conn: sqlite3.Connection, source: str, stub: FlightStub) -> None:
-    conn.execute(
+def connect_db(db_url: str, db_path: str) -> Db:
+    if db_url:
+        if psycopg is None:
+            raise RuntimeError("psycopg is required for postgres. Install with: pip install psycopg[binary]")
+        conn = psycopg.connect(db_url)
+        return Db(conn, "postgres")
+    conn = sqlite3.connect(db_path)
+    return Db(conn, "sqlite")
+
+
+def ensure_db(db: Db) -> None:
+    if db.kind == "sqlite":
+        db.executescript(SQLITE_SCHEMA)
+    else:
+        db.executescript(PG_SCHEMA)
+    db.commit()
+    ensure_columns(db)
+
+
+def ensure_columns(db: Db) -> None:
+    if db.kind == "sqlite":
+        cur = db.execute("PRAGMA table_info(flights)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "duplicate_of" not in columns:
+            db.execute("ALTER TABLE flights ADD COLUMN duplicate_of TEXT")
+            db.commit()
+        if "updated_at" not in columns:
+            db.execute("ALTER TABLE flights ADD COLUMN updated_at TEXT")
+            db.commit()
+        return
+    db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS duplicate_of TEXT")
+    db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS updated_at TEXT")
+    db.commit()
+
+
+def db_upsert_flight_stub(db: Db, source: str, stub: FlightStub) -> None:
+    now = utcnow()
+    db.execute(
         """
-        INSERT INTO flights (source, flight_id, show_url, status)
-        VALUES (?, ?, ?, 'new')
+        INSERT INTO flights (source, flight_id, show_url, status, updated_at)
+        VALUES (?, ?, ?, 'new', ?)
         ON CONFLICT(source, flight_id) DO UPDATE SET
-            show_url=COALESCE(excluded.show_url, flights.show_url)
+            show_url=COALESCE(excluded.show_url, flights.show_url),
+            updated_at=excluded.updated_at
         """,
-        (source, stub.flight_id, stub.show_url),
+        (source, stub.flight_id, stub.show_url, now),
     )
 
 
 def db_update_crawl_state(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     list_url: str,
     next_list_url: Optional[str],
     last_seen_flight_id: Optional[str],
 ) -> None:
-    conn.execute(
+    db.execute(
         """
         INSERT INTO crawl_state (source, list_url, next_list_url, last_seen_flight_id, updated_at)
         VALUES (?, ?, ?, ?, ?)
@@ -182,8 +298,8 @@ def db_update_crawl_state(
     )
 
 
-def db_get_crawl_state(conn: sqlite3.Connection, source: str) -> Tuple[Optional[str], Optional[str]]:
-    cur = conn.execute(
+def db_get_crawl_state(db: Db, source: str) -> Tuple[Optional[str], Optional[str]]:
+    cur = db.execute(
         "SELECT next_list_url, list_url FROM crawl_state WHERE source=?",
         (source,),
     )
@@ -194,7 +310,7 @@ def db_get_crawl_state(conn: sqlite3.Connection, source: str) -> Tuple[Optional[
 
 
 def db_update_crawl_state_list(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     list_key: str,
     list_url: str,
@@ -202,7 +318,7 @@ def db_update_crawl_state_list(
     last_seen_flight_id: Optional[str],
     year: Optional[int],
 ) -> None:
-    conn.execute(
+    db.execute(
         """
         INSERT INTO crawl_state_list (
             source,
@@ -226,11 +342,11 @@ def db_update_crawl_state_list(
 
 
 def db_get_crawl_state_list(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     list_key: str,
 ) -> Tuple[Optional[str], Optional[str]]:
-    cur = conn.execute(
+    cur = db.execute(
         "SELECT next_list_url, list_url FROM crawl_state_list WHERE source=? AND list_key=?",
         (source, list_key),
     )
@@ -240,19 +356,20 @@ def db_get_crawl_state_list(
     return row[0], row[1]
 
 
-def db_mark_failed(conn: sqlite3.Connection, source: str, flight_id: str, error_msg: str) -> None:
-    conn.execute(
+def db_mark_failed(db: Db, source: str, flight_id: str, error_msg: str) -> None:
+    now = utcnow()
+    db.execute(
         """
         UPDATE flights
-        SET status='failed', error_msg=?, retry_count=retry_count+1
+        SET status='failed', error_msg=?, retry_count=retry_count+1, updated_at=?
         WHERE source=? AND flight_id=?
         """,
-        (error_msg[:500], source, flight_id),
+        (error_msg[:500], now, source, flight_id),
     )
 
 
 def db_update_after_download(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     flight_id: str,
     igc_url: str,
@@ -261,35 +378,37 @@ def db_update_after_download(
     sha256: str,
     downloaded_at: str,
 ) -> None:
-    conn.execute(
+    db.execute(
         """
         UPDATE flights
-        SET igc_url=?, igc_path=?, file_size=?, sha256=?, downloaded_at=?, status='downloaded', error_msg=NULL
+        SET igc_url=?, igc_path=?, file_size=?, sha256=?, downloaded_at=?, updated_at=?,
+            status='downloaded', error_msg=NULL
         WHERE source=? AND flight_id=?
         """,
-        (igc_url, igc_path, file_size, sha256, downloaded_at, source, flight_id),
+        (igc_url, igc_path, file_size, sha256, downloaded_at, downloaded_at, source, flight_id),
     )
 
 
 def db_update_file_hash(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     flight_id: str,
     sha256: str,
     file_size: int,
 ) -> None:
-    conn.execute(
+    now = utcnow()
+    db.execute(
         """
         UPDATE flights
-        SET sha256=?, file_size=?
+        SET sha256=?, file_size=?, updated_at=?
         WHERE source=? AND flight_id=?
         """,
-        (sha256, file_size, source, flight_id),
+        (sha256, file_size, now, source, flight_id),
     )
 
 
 def db_mark_duplicate(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     flight_id: str,
     sha256: str,
@@ -297,49 +416,54 @@ def db_mark_duplicate(
     duplicate_of: str,
     igc_path: Optional[str],
 ) -> None:
-    conn.execute(
+    now = utcnow()
+    db.execute(
         """
         UPDATE flights
         SET status='duplicate',
             duplicate_of=?,
             sha256=?,
             file_size=?,
-            igc_path=COALESCE(?, igc_path)
+            igc_path=COALESCE(?, igc_path),
+            updated_at=?
         WHERE source=? AND flight_id=?
         """,
-        (duplicate_of, sha256, file_size, igc_path, source, flight_id),
+        (duplicate_of, sha256, file_size, igc_path, now, source, flight_id),
     )
 
 
 def db_update_igc_url(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     flight_id: str,
     igc_url: str,
 ) -> None:
-    conn.execute(
+    now = utcnow()
+    db.execute(
         """
         UPDATE flights
-        SET igc_url=?, status='queued', error_msg=NULL
+        SET igc_url=?, status='queued', error_msg=NULL, updated_at=?
         WHERE source=? AND flight_id=?
         """,
-        (igc_url, source, flight_id),
+        (igc_url, now, source, flight_id),
     )
 
 
 def db_update_after_parse(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     flight_id: str,
     meta: dict,
 ) -> None:
-    conn.execute(
+    now = utcnow()
+    db.execute(
         """
         UPDATE flights
         SET status='parsed',
             flight_date=?, pilot=?, glider=?, glider_class=?,
             takeoff_lat=?, takeoff_lon=?, takeoff_name=?,
-            duration_sec=?, track_points=?, has_baro_alt=?, has_gps_alt=?
+            duration_sec=?, track_points=?, has_baro_alt=?, has_gps_alt=?,
+            updated_at=?
         WHERE source=? AND flight_id=?
         """,
         (
@@ -354,6 +478,7 @@ def db_update_after_parse(
             meta.get("track_points"),
             meta.get("has_baro_alt"),
             meta.get("has_gps_alt"),
+            now,
             source,
             flight_id,
         ),
@@ -370,6 +495,50 @@ def request_stop(_: int, __: object) -> None:
         return
     STOP_REQUESTED = True
     print("stop requested: finishing current task and exiting", flush=True)
+
+
+def force_ipv4_only() -> None:
+    if urllib3_connection is None:
+        return
+
+    def allowed_gai_family() -> int:
+        return socket.AF_INET
+
+    urllib3_connection.allowed_gai_family = allowed_gai_family
+
+
+def extract_antibot_cookie(html: str) -> Optional[str]:
+    if "document.cookie" not in html:
+        return None
+    base_match = re.search(r'document.cookie="([^"]+)"', html)
+    if not base_match:
+        return None
+    raw = base_match.group(1)
+    try:
+        decoded = raw.encode("utf-8").decode("unicode_escape")
+    except Exception:
+        decoded = raw
+    sqrt_match = re.search(r'document.cookie="[^"]+"\\+Math.sqrt\\((\\d+)\\)', html)
+    if sqrt_match:
+        decoded += str(int(math.sqrt(int(sqrt_match.group(1)))))
+    if not decoded.startswith("antibot="):
+        return None
+    return decoded.split(";", 1)[0]
+
+
+def update_cookie_header(session: requests.Session, cookie_kv: str) -> None:
+    if "=" not in cookie_kv:
+        return
+    name, value = cookie_kv.split("=", 1)
+    current = session.headers.get("Cookie", "")
+    parts = [p.strip() for p in current.split(";") if p.strip()]
+    cookies = {}
+    for part in parts:
+        if "=" in part:
+            k, v = part.split("=", 1)
+            cookies[k] = v
+    cookies[name] = value
+    session.headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items())
 
 
 def normalize_url(url: str) -> str:
@@ -417,12 +586,20 @@ def build_year_list_url(year: int, list_url: str) -> str:
 
 def fetch(session: requests.Session, url: str, timeout: int, retries: int, limiter: RateLimiter) -> str:
     last_exc: Optional[Exception] = None
+    antibot_applied = False
     for attempt in range(retries + 1):
         try:
             limiter.sleep()
             resp = session.get(url, timeout=timeout)
-            resp.raise_for_status()
-            return resp.text
+            text = resp.text
+            if resp.status_code >= 400:
+                antibot = extract_antibot_cookie(text)
+                if antibot and not antibot_applied:
+                    update_cookie_header(session, antibot)
+                    antibot_applied = True
+                    continue
+                resp.raise_for_status()
+            return text
         except Exception as exc:
             last_exc = exc
             backoff = 1.0 + (2 ** attempt) * 0.5
@@ -470,12 +647,12 @@ def compute_sha256(file_path: str) -> str:
 
 
 def find_duplicate(
-    conn: sqlite3.Connection,
+    db: Db,
     sha256: str,
     source: str,
     flight_id: str,
 ) -> Optional[Tuple[str, str, Optional[str]]]:
-    cur = conn.execute(
+    cur = db.execute(
         """
         SELECT source, flight_id, igc_path
         FROM flights
@@ -765,12 +942,12 @@ def build_dest_path(out_dir: str, flight_id: str, filename: str, flight_date: Op
     return os.path.join(dest_dir, filename)
 
 
-def iter_pending_flights(conn: sqlite3.Connection, source: str, max_retries: int) -> Iterable[Tuple[str, str]]:
-    cur = conn.execute(
+def iter_pending_flights(db: Db, source: str, max_retries: int) -> Iterable[Tuple[str, str]]:
+    cur = db.execute(
         """
         SELECT flight_id, show_url
         FROM flights
-        WHERE source=? AND status IN ('new','failed','queued') AND retry_count < ?
+        WHERE source=? AND status IN ('new','failed','queued','downloading') AND retry_count < ? AND igc_url IS NOT NULL
         ORDER BY id ASC
         """,
         (source, max_retries),
@@ -779,8 +956,21 @@ def iter_pending_flights(conn: sqlite3.Connection, source: str, max_retries: int
         yield row[0], row[1]
 
 
-def iter_link_flights(conn: sqlite3.Connection, source: str, max_retries: int) -> Iterable[Tuple[str, str]]:
-    cur = conn.execute(
+def count_pending_flights(db: Db, source: str, max_retries: int) -> int:
+    cur = db.execute(
+        """
+        SELECT COUNT(*)
+        FROM flights
+        WHERE source=? AND status IN ('new','failed','queued','downloading') AND retry_count < ? AND igc_url IS NOT NULL
+        """,
+        (source, max_retries),
+    )
+    row = cur.fetchone()
+    return int(row[0]) if row else 0
+
+
+def iter_link_flights(db: Db, source: str, max_retries: int) -> Iterable[Tuple[str, str]]:
+    cur = db.execute(
         """
         SELECT flight_id, show_url
         FROM flights
@@ -794,7 +984,7 @@ def iter_link_flights(conn: sqlite3.Connection, source: str, max_retries: int) -
 
 
 def crawl_list(
-    conn: sqlite3.Connection,
+    db: Db,
     session: requests.Session,
     base_url: str,
     list_url: str,
@@ -824,18 +1014,18 @@ def crawl_list(
                 max_page = page_max
         last_flight_id = None
         for stub in stubs:
-            db_upsert_flight_stub(conn, source, stub)
+            db_upsert_flight_stub(db, source, stub)
             last_flight_id = stub.flight_id
-        conn.commit()
+        db.commit()
         total += len(stubs)
         if year is None:
             print(f"list page {page + 1}: +{len(stubs)} flights", flush=True)
         else:
             print(f"list {year} page {page + 1}: +{len(stubs)} flights", flush=True)
         next_url = find_next_list_url(html, base_url, url)
-        db_update_crawl_state(conn, source, url, next_url, last_flight_id)
-        db_update_crawl_state_list(conn, source, list_key, url, next_url, last_flight_id, year)
-        conn.commit()
+        db_update_crawl_state(db, source, url, next_url, last_flight_id)
+        db_update_crawl_state_list(db, source, list_key, url, next_url, last_flight_id, year)
+        db.commit()
         if not next_url or next_url == url:
             current_page = extract_page_num(url)
             if current_page is not None and stubs:
@@ -850,7 +1040,7 @@ def crawl_list(
 
 
 def process_flights(
-    conn: sqlite3.Connection,
+    db: Db,
     session: requests.Session,
     base_url: str,
     out_dir: str,
@@ -865,23 +1055,29 @@ def process_flights(
     incoming_dir = os.path.join(out_dir, "_incoming")
     ensure_dirs(incoming_dir)
 
+    total_count: Optional[int]
+    if max_flights is None:
+        total_count = count_pending_flights(db, source, max_retries)
+    else:
+        total_count = max_flights
+
     count = 0
-    for flight_id, show_url in iter_pending_flights(conn, source, max_retries):
+    for flight_id, show_url in iter_pending_flights(db, source, max_retries):
         if STOP_REQUESTED:
             break
         if max_flights is not None and count >= max_flights:
             break
-        if max_flights is None:
+        if total_count is None:
             progress = f"{count + 1}"
         else:
-            progress = f"{count + 1}/{max_flights}"
+            progress = f"{count + 1}/{total_count}"
         prefix = f"flight {progress}: {flight_id}"
         try:
             html = fetch(session, show_url, timeout=timeout, retries=retries, limiter=limiter)
             igc_url = extract_igc_url(html, base_url)
             if not igc_url:
-                db_mark_failed(conn, source, flight_id, "no igc url found")
-                conn.commit()
+                db_mark_failed(db, source, flight_id, "no igc url found")
+                db.commit()
                 print(f"{prefix}: no igc url", flush=True)
                 continue
 
@@ -899,12 +1095,12 @@ def process_flights(
                 limiter=limiter,
             )
 
-            duplicate = find_duplicate(conn, sha256, source, flight_id)
+            duplicate = find_duplicate(db, sha256, source, flight_id)
             if duplicate:
                 dup_source, dup_flight_id, dup_path = duplicate
                 dup_tag = f"{dup_source}:{dup_flight_id}"
                 db_mark_duplicate(
-                    conn,
+                    db,
                     source,
                     flight_id,
                     sha256,
@@ -912,7 +1108,7 @@ def process_flights(
                     dup_tag,
                     dup_path,
                 )
-                conn.commit()
+                db.commit()
                 if os.path.exists(tmp_path):
                     os.remove(tmp_path)
                 print(f"{prefix}: duplicate of {dup_tag}", flush=True)
@@ -923,7 +1119,7 @@ def process_flights(
             os.replace(tmp_path, dest_path)
 
             db_update_after_download(
-                conn,
+                db,
                 source,
                 flight_id,
                 igc_url,
@@ -932,19 +1128,19 @@ def process_flights(
                 sha256,
                 utcnow(),
             )
-            db_update_after_parse(conn, source, flight_id, meta)
-            conn.commit()
+            db_update_after_parse(db, source, flight_id, meta)
+            db.commit()
             count += 1
             print(f"{prefix}: downloaded", flush=True)
         except Exception as exc:
-            db_mark_failed(conn, source, flight_id, str(exc))
-            conn.commit()
+            db_mark_failed(db, source, flight_id, str(exc))
+            db.commit()
             print(f"{prefix}: failed ({exc})", flush=True)
     return count
 
 
 def process_links(
-    conn: sqlite3.Connection,
+    db: Db,
     session: requests.Session,
     base_url: str,
     timeout: int,
@@ -955,7 +1151,7 @@ def process_links(
     max_links: Optional[int],
 ) -> int:
     count = 0
-    for flight_id, show_url in iter_link_flights(conn, source, max_retries):
+    for flight_id, show_url in iter_link_flights(db, source, max_retries):
         if STOP_REQUESTED:
             break
         if max_links is not None and count >= max_links:
@@ -969,27 +1165,27 @@ def process_links(
             html = fetch(session, show_url, timeout=timeout, retries=retries, limiter=limiter)
             igc_url = extract_igc_url(html, base_url)
             if not igc_url:
-                db_mark_failed(conn, source, flight_id, "no igc url found")
-                conn.commit()
+                db_mark_failed(db, source, flight_id, "no igc url found")
+                db.commit()
                 print(f"link {flight_id}: no igc url", flush=True)
                 continue
-            db_update_igc_url(conn, source, flight_id, igc_url)
-            conn.commit()
+            db_update_igc_url(db, source, flight_id, igc_url)
+            db.commit()
             count += 1
             print(f"link {flight_id}: queued", flush=True)
         except Exception as exc:
-            db_mark_failed(conn, source, flight_id, str(exc))
-            conn.commit()
+            db_mark_failed(db, source, flight_id, str(exc))
+            db.commit()
             print(f"link {flight_id}: failed ({exc})", flush=True)
     return count
 
 
 def reparse_existing(
-    conn: sqlite3.Connection,
+    db: Db,
     source: str,
     max_files: Optional[int],
 ) -> int:
-    cur = conn.execute(
+    cur = db.execute(
         """
         SELECT flight_id, igc_path
         FROM flights
@@ -1010,12 +1206,12 @@ def reparse_existing(
         try:
             sha256 = compute_sha256(igc_path)
             file_size = os.path.getsize(igc_path)
-            duplicate = find_duplicate(conn, sha256, source, flight_id)
+            duplicate = find_duplicate(db, sha256, source, flight_id)
             if duplicate:
                 dup_source, dup_flight_id, _dup_path = duplicate
                 dup_tag = f"{dup_source}:{dup_flight_id}"
                 db_mark_duplicate(
-                    conn,
+                    db,
                     source,
                     flight_id,
                     sha256,
@@ -1023,20 +1219,74 @@ def reparse_existing(
                     dup_tag,
                     None,
                 )
-                conn.commit()
+                db.commit()
                 print(f"reparse {flight_id}: duplicate of {dup_tag}", flush=True)
                 continue
-            db_update_file_hash(conn, source, flight_id, sha256, file_size)
+            db_update_file_hash(db, source, flight_id, sha256, file_size)
             meta = parse_igc(igc_path)
-            db_update_after_parse(conn, source, flight_id, meta)
-            conn.commit()
+            db_update_after_parse(db, source, flight_id, meta)
+            db.commit()
             count += 1
             print(f"reparse {flight_id}: updated", flush=True)
         except Exception as exc:
-            db_mark_failed(conn, source, flight_id, str(exc))
-            conn.commit()
+            db_mark_failed(db, source, flight_id, str(exc))
+            db.commit()
             print(f"reparse {flight_id}: failed ({exc})", flush=True)
     return count
+
+
+def collect_stats(db: Db, source: str) -> dict:
+    stats = {
+        "total": 0,
+        "with_igc_url": 0,
+        "without_igc_url": 0,
+        "downloaded": 0,
+        "parsed": 0,
+        "duplicate": 0,
+    }
+    cur = db.execute(
+        "SELECT COUNT(*) FROM flights WHERE source=?",
+        (source,),
+    )
+    stats["total"] = int(cur.fetchone()[0])
+    cur = db.execute(
+        "SELECT COUNT(*) FROM flights WHERE source=? AND igc_url IS NOT NULL",
+        (source,),
+    )
+    stats["with_igc_url"] = int(cur.fetchone()[0])
+    stats["without_igc_url"] = stats["total"] - stats["with_igc_url"]
+    cur = db.execute(
+        """
+        SELECT status, COUNT(*)
+        FROM flights
+        WHERE source=?
+        GROUP BY status
+        """,
+        (source,),
+    )
+    status_counts = {row[0]: int(row[1]) for row in cur.fetchall()}
+    stats["status_counts"] = status_counts
+    stats["downloaded"] = status_counts.get("downloaded", 0)
+    stats["parsed"] = status_counts.get("parsed", 0)
+    stats["duplicate"] = status_counts.get("duplicate", 0)
+    return stats
+
+
+def print_stats(db: Db, source: str) -> None:
+    stats = collect_stats(db, source)
+    status_counts = stats.get("status_counts", {})
+    parts = [
+        f"total={stats['total']}",
+        f"with_igc_url={stats['with_igc_url']}",
+        f"without_igc_url={stats['without_igc_url']}",
+        f"downloaded={stats['downloaded']}",
+        f"parsed={stats['parsed']}",
+        f"duplicate={stats['duplicate']}",
+    ]
+    if status_counts:
+        extras = ",".join(f"{k}={v}" for k, v in sorted(status_counts.items()))
+        parts.append(f"status[{extras}]")
+    print("stats: " + " ".join(parts), flush=True)
 
 
 def main() -> int:
@@ -1044,7 +1294,10 @@ def main() -> int:
     parser.add_argument("--base-url", default=BASE_URL_DEFAULT)
     parser.add_argument("--list-url", default=LIST_URL_DEFAULT)
     parser.add_argument("--years", default="")
+    parser.add_argument("--source", default="skygr")
+    parser.add_argument("--cookie", default="")
     parser.add_argument("--db-path", default=os.path.join("data", "igc", "index.sqlite"))
+    parser.add_argument("--db-url", default=os.environ.get("IGC_DB_URL", ""))
     parser.add_argument("--out-dir", default=os.path.join("data", "igc", "skygr"))
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--max-flights", type=int, default=200)
@@ -1061,17 +1314,38 @@ def main() -> int:
     parser.add_argument("--continue", dest="continue_mode", action="store_true")
     parser.add_argument("--reparse", action="store_true")
     parser.add_argument("--reparse-only", action="store_true")
+    parser.add_argument("--force-ipv4", action="store_true")
+    parser.add_argument("--proxy", default="")
+    parser.add_argument("--header", action="append", default=[])
     parser.add_argument("--user-agent", default=USER_AGENT_DEFAULT)
     args = parser.parse_args()
 
     signal.signal(signal.SIGINT, request_stop)
 
-    ensure_dirs(os.path.dirname(args.db_path))
-    conn = sqlite3.connect(args.db_path)
-    ensure_db(conn)
+    db = connect_db(args.db_url, args.db_path)
+    if db.kind == "sqlite":
+        ensure_dirs(os.path.dirname(args.db_path))
+    ensure_db(db)
+
+    if args.force_ipv4:
+        force_ipv4_only()
 
     session = requests.Session()
-    session.headers.update({"User-Agent": args.user_agent})
+    session.headers.update(
+        {
+            "User-Agent": args.user_agent,
+            "Accept-Encoding": "gzip, deflate",
+        }
+    )
+    for header in args.header:
+        if ":" not in header:
+            continue
+        key, value = header.split(":", 1)
+        session.headers[key.strip()] = value.strip()
+    if args.proxy:
+        session.proxies.update({"http": args.proxy, "https": args.proxy})
+    if args.cookie:
+        session.headers.update({"Cookie": args.cookie})
 
     limiter = RateLimiter(args.min_delay, args.max_delay)
 
@@ -1081,24 +1355,49 @@ def main() -> int:
         args.links_only = True
         args.download_only = True
 
-    if not args.download_only:
-        year_list: List[int] = []
-        if args.years:
-            year_list = parse_years(args.years)
-        if year_list:
-            total_all = 0
-            for year in year_list:
-                if STOP_REQUESTED:
-                    break
-                list_key = sanitize_list_key(build_year_list_url(year, args.list_url))
+    try:
+        if not args.download_only:
+            year_list: List[int] = []
+            if args.years:
+                year_list = parse_years(args.years)
+            if year_list:
+                total_all = 0
+                for year in year_list:
+                    if STOP_REQUESTED:
+                        break
+                    list_key = sanitize_list_key(build_year_list_url(year, args.list_url))
+                    list_url = list_key
+                    if args.continue_mode:
+                        next_url, last_url = db_get_crawl_state_list(db, args.source, list_key)
+                        list_url = next_url or last_url or list_url
+                        if list_url != list_key:
+                            print(f"continue {year} list from: {list_url}", flush=True)
+                    total = crawl_list(
+                        db=db,
+                        session=session,
+                        base_url=args.base_url,
+                        list_url=list_url,
+                        list_key=list_key,
+                        max_pages=args.max_pages,
+                        limiter=limiter,
+                        timeout=args.timeout,
+                        retries=args.retries,
+                        source=args.source,
+                        year=year,
+                    )
+                    print(f"list {year} crawl: {total} flights discovered")
+                    total_all += total
+                print(f"list crawl total: {total_all} flights discovered")
+            else:
+                list_key = sanitize_list_key(args.list_url)
                 list_url = list_key
                 if args.continue_mode:
-                    next_url, last_url = db_get_crawl_state_list(conn, "skygr", list_key)
+                    next_url, last_url = db_get_crawl_state_list(db, args.source, list_key)
                     list_url = next_url or last_url or list_url
                     if list_url != list_key:
-                        print(f"continue {year} list from: {list_url}", flush=True)
+                        print(f"continue list from: {list_url}", flush=True)
                 total = crawl_list(
-                    conn=conn,
+                    db=db,
                     session=session,
                     base_url=args.base_url,
                     list_url=list_url,
@@ -1107,87 +1406,66 @@ def main() -> int:
                     limiter=limiter,
                     timeout=args.timeout,
                     retries=args.retries,
-                    source="skygr",
-                    year=year,
+                    source=args.source,
+                    year=None,
                 )
-                print(f"list {year} crawl: {total} flights discovered")
-                total_all += total
-            print(f"list crawl total: {total_all} flights discovered")
+                print(f"list crawl: {total} flights discovered")
+
+        max_links: Optional[int]
+        if args.max_links <= 0:
+            max_links = None
         else:
-            list_key = sanitize_list_key(args.list_url)
-            list_url = list_key
-            if args.continue_mode:
-                next_url, last_url = db_get_crawl_state_list(conn, "skygr", list_key)
-                list_url = next_url or last_url or list_url
-                if list_url != list_key:
-                    print(f"continue list from: {list_url}", flush=True)
-            total = crawl_list(
-                conn=conn,
+            max_links = args.max_links
+
+        if args.links_only and not args.list_only:
+            linked = process_links(
+                db=db,
                 session=session,
                 base_url=args.base_url,
-                list_url=list_url,
-                list_key=list_key,
-                max_pages=args.max_pages,
-                limiter=limiter,
                 timeout=args.timeout,
                 retries=args.retries,
-                source="skygr",
-                year=None,
+                limiter=limiter,
+                source=args.source,
+                max_retries=args.max_retries,
+                max_links=max_links,
             )
-            print(f"list crawl: {total} flights discovered")
+            print(f"links queued: {linked} flights")
 
-    max_links: Optional[int]
-    if args.max_links <= 0:
-        max_links = None
-    else:
-        max_links = args.max_links
+        max_flights: Optional[int]
+        if args.max_flights <= 0:
+            max_flights = None
+        else:
+            max_flights = args.max_flights
 
-    if args.links_only and not args.list_only:
-        linked = process_links(
-            conn=conn,
-            session=session,
-            base_url=args.base_url,
-            timeout=args.timeout,
-            retries=args.retries,
-            limiter=limiter,
-            source="skygr",
-            max_retries=args.max_retries,
-            max_links=max_links,
-        )
-        print(f"links queued: {linked} flights")
+        if not args.list_only and not args.links_only:
+            processed = process_flights(
+                db=db,
+                session=session,
+                base_url=args.base_url,
+                out_dir=args.out_dir,
+                timeout=args.timeout,
+                retries=args.retries,
+                limiter=limiter,
+                source=args.source,
+                max_retries=args.max_retries,
+                max_flights=max_flights,
+            )
+            print(f"downloaded+parsed: {processed} flights")
 
-    max_flights: Optional[int]
-    if args.max_flights <= 0:
-        max_flights = None
-    else:
-        max_flights = args.max_flights
+        max_reparse: Optional[int]
+        if args.max_reparse <= 0:
+            max_reparse = None
+        else:
+            max_reparse = args.max_reparse
 
-    if not args.list_only and not args.links_only:
-        processed = process_flights(
-            conn=conn,
-            session=session,
-            base_url=args.base_url,
-            out_dir=args.out_dir,
-            timeout=args.timeout,
-            retries=args.retries,
-            limiter=limiter,
-            source="skygr",
-            max_retries=args.max_retries,
-            max_flights=max_flights,
-        )
-        print(f"downloaded+parsed: {processed} flights")
-
-    max_reparse: Optional[int]
-    if args.max_reparse <= 0:
-        max_reparse = None
-    else:
-        max_reparse = args.max_reparse
-
-    if args.reparse:
-        updated = reparse_existing(conn=conn, source="skygr", max_files=max_reparse)
-        print(f"reparse updated: {updated} flights")
-
-    conn.close()
+        if args.reparse:
+            updated = reparse_existing(db=db, source=args.source, max_files=max_reparse)
+            print(f"reparse updated: {updated} flights")
+    finally:
+        try:
+            print_stats(db, args.source)
+        finally:
+            db.close()
     return 0
 
 

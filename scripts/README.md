@@ -27,6 +27,10 @@ sh update_nn_README.sh # If you have modified the neural network documentation
 ## IGC ingestion (sky.gr)
 
 ```bash
+# Postgres only; set --db-url or IGC_DB_URL
+# Example:
+# export IGC_DB_URL="postgresql://paraglidable:paraglidable@localhost:5432/paraglidable"
+
 # Collect IGC links for a year range (resumable per year)
 python igc_ingest_skygr.py --links-only --years 2010-2025 --continue --max-pages 0 --max-links 0
 
@@ -36,3 +40,20 @@ python igc_ingest_skygr.py --download-only --max-flights 0 --min-delay 2 --max-d
 # Reparse metadata for already downloaded files
 python igc_ingest_skygr.py --reparse-only --max-reparse 0
 ```
+
+## IGC bridge server (browser -> DB)
+
+```bash
+# Postgres
+python igc_bridge_server.py --db-url postgresql://paraglidable:paraglidable@localhost:5432/paraglidable
+```
+
+## Browser extension (paraplan.ru)
+
+```bash
+# Start the local backend
+python igc_bridge_server.py --db-url postgresql://paraglidable:paraglidable@localhost:5432/paraglidable
+```
+
+Then load the extension from `extensions/paraplan_igc` and configure the server
+URL in the popup. See `extensions/README.md` for the full usage flow.

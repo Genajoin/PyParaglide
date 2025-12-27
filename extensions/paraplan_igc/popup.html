@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>IGC Helper</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="container">
+      <h1>IGC Helper</h1>
+      <div class="stats" id="stats"></div>
+      <div class="status" id="processStatus"></div>
+
+      <div class="controls">
+        <label>
+          Delay (ms)
+          <input id="delay" type="number" min="0" value="1500">
+        </label>
+      </div>
+
+      <div class="controls">
+        <label>
+          Backfill limit
+          <input id="backfillLimit" type="number" min="0" value="500">
+        </label>
+      </div>
+
+      <div class="controls">
+        <label>
+          Server
+          <input id="serverUrl" type="text" value="http://127.0.0.1:8787">
+        </label>
+      </div>
+
+      <div class="buttons">
+        <button id="collectLinks">Collect flight links (page)</button>
+        <button id="collectIgc">Collect IGC link (flight page)</button>
+        <button id="resolveIgc">Resolve IGC links</button>
+        <button id="stopResolve" class="secondary">Stop resolving</button>
+        <button id="downloadIgc">Start downloads</button>
+        <button id="stopDownload" class="secondary">Stop downloads</button>
+        <button id="backfillDownloads" class="secondary">Backfill downloads</button>
+        <button id="clearAll" class="secondary">Clear local settings</button>
+      </div>
+
+      <div class="log" id="log"></div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

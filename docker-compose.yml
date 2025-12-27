@@ -1,0 +1,57 @@
+services:
+  paraglidable:
+    build:
+      context: ./docker
+      dockerfile: Dockerfile
+    container_name: paraglidable
+    hostname: paraglidable
+    user: paraglidable
+    working_dir: /workspaces/Paraglidable
+    volumes:
+      # Монтируем весь проект для локальной разработки
+      - .:/workspaces/Paraglidable
+      # Сохраняем только данные между перезапусками
+      - neural-data:/workspaces/Paraglidable/neural_network/data
+      - jupyter:/home/paraglidable/.local/share/jupyter
+    ports:
+      # Apache web server
+      - "8001:80"
+      # Jupyter notebook
+      - "8888:8888"
+    environment:
+      - DEBIAN_FRONTEND=noninteractive
+    command: |
+      /bin/bash -c "
+      sudo sed -i 's|DocumentRoot /var/www/html|DocumentRoot /workspaces/Paraglidable/www|' /etc/apache2/sites-available/000-default.conf &&
+      sudo bash -c 'cat >> /etc/apache2/sites-available/000-default.conf << EOF
+      <Directory /workspaces/Paraglidable/www>
+          Options Indexes FollowSymLinks
+          AllowOverride All
+          Require all granted
+      </Directory>
+      EOF' &&
+      sudo bash -c 'echo \"ServerName localhost\" >> /etc/apache2/apache2.conf' &&
+      sudo a2enmod rewrite &&
+      sudo service apache2 start &&
+      tail -f /dev/null"
+    stdin_open: true
+    tty: true
+
+  postgres:
+    image: postgres:16
+    container_name: paraglidable-postgres
+    hostname: paraglidable-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: paraglidable
+      POSTGRES_PASSWORD: paraglidable
+      POSTGRES_DB: paraglidable
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  neural-data:
+  jupyter:
+  pgdata:

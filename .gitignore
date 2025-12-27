@@ -1,7 +1,14 @@
 *.o
 *.elev
 www/data/
+data/igc/*
 tiler/_cache/
+tiler/Tiler/.qmake.stash
+tiler/Tiler/Makefile
+tiler/Tiler/Tiler
 .DS_Store
 __pycache__
 neural_network/bin/data
+CLAUDE.md
+.vscode/*
+paraglidable.session.sql
