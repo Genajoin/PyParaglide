@@ -2,6 +2,7 @@
 *.elev
 www/data/
 data/igc/*
+data/gfs/
 tiler/_cache/
 tiler/Tiler/.qmake.stash
 tiler/Tiler/Makefile
@@ -9,6 +10,9 @@ tiler/Tiler/Tiler
 .DS_Store
 __pycache__
 neural_network/bin/data
+neural_network/bin/data_test/
+neural_network/bin/models/TEST_*/
+neural_network/test_train.py
 CLAUDE.md
 .vscode/*
 paraglidable.session.sql

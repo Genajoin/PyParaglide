@@ -7,7 +7,6 @@ import random
 import re
 import signal
 import socket
-import sqlite3
 import sys
 import time
 from dataclasses import dataclass
@@ -91,61 +90,6 @@ class RateLimiter:
         self._last_time = time.time()
 
 
-SQLITE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS flights (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    flight_id TEXT NOT NULL,
-    show_url TEXT,
-    igc_url TEXT,
-    igc_path TEXT,
-    file_size INTEGER,
-    sha256 TEXT,
-    duplicate_of TEXT,
-    status TEXT NOT NULL,
-    error_msg TEXT,
-    retry_count INTEGER NOT NULL DEFAULT 0,
-    downloaded_at TEXT,
-    updated_at TEXT,
-    flight_date TEXT,
-    pilot TEXT,
-    glider TEXT,
-    glider_class TEXT,
-    takeoff_lat REAL,
-    takeoff_lon REAL,
-    takeoff_name TEXT,
-    duration_sec INTEGER,
-    distance_km REAL,
-    score REAL,
-    track_points INTEGER,
-    has_baro_alt INTEGER,
-    has_gps_alt INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_flights_source_id ON flights(source, flight_id);
-CREATE INDEX IF NOT EXISTS idx_flights_status ON flights(status);
-CREATE INDEX IF NOT EXISTS idx_flights_flight_date ON flights(flight_date);
-CREATE INDEX IF NOT EXISTS idx_flights_sha256 ON flights(sha256);
-
-CREATE TABLE IF NOT EXISTS crawl_state (
-    source TEXT PRIMARY KEY,
-    list_url TEXT,
-    next_list_url TEXT,
-    last_seen_flight_id TEXT,
-    updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS crawl_state_list (
-    source TEXT NOT NULL,
-    list_key TEXT NOT NULL,
-    list_url TEXT,
-    next_list_url TEXT,
-    last_seen_flight_id TEXT,
-    year INTEGER,
-    updated_at TEXT,
-    PRIMARY KEY (source, list_key)
-);
-CREATE INDEX IF NOT EXISTS idx_crawl_state_list_year ON crawl_state_list(year);
-"""
-
 PG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS flights (
     id BIGSERIAL PRIMARY KEY,
@@ -203,19 +147,18 @@ CREATE INDEX IF NOT EXISTS idx_crawl_state_list_year ON crawl_state_list(year);
 
 
 class Db:
-    def __init__(self, conn: Any, kind: str) -> None:
+    """PostgreSQL database wrapper."""
+
+    def __init__(self, conn: Any) -> None:
         self.conn = conn
-        self.kind = kind
 
     def execute(self, sql: str, params: Tuple[Any, ...] = ()) -> Any:
-        if self.kind == "postgres":
-            sql = sql.replace("?", "%s")
+        """Execute SQL with ? placeholders (converted to %s for PostgreSQL)."""
+        sql = sql.replace("?", "%s")
         return self.conn.execute(sql, params)
 
     def executescript(self, script: str) -> None:
-        if self.kind == "sqlite":
-            self.conn.executescript(script)
-            return
+        """Execute multi-statement SQL script."""
         for stmt in script.split(";"):
             stmt = stmt.strip()
             if stmt:
@@ -228,36 +171,31 @@ class Db:
         self.conn.close()
 
 
-def connect_db(db_url: str, db_path: str) -> Db:
-    if db_url:
-        if psycopg is None:
-            raise RuntimeError("psycopg is required for postgres. Install with: pip install psycopg[binary]")
-        conn = psycopg.connect(db_url)
-        return Db(conn, "postgres")
-    conn = sqlite3.connect(db_path)
-    return Db(conn, "sqlite")
+def connect_db(db_url: str, db_path: str = None) -> Db:
+    """Connect to PostgreSQL database.
+
+    Args:
+        db_url: PostgreSQL connection URL
+        db_path: Ignored (kept for backwards compatibility)
+
+    Returns:
+        Db wrapper instance
+    """
+    if psycopg is None:
+        raise RuntimeError("psycopg is required. Install with: pip install psycopg[binary]")
+    conn = psycopg.connect(db_url)
+    return Db(conn)
 
 
 def ensure_db(db: Db) -> None:
-    if db.kind == "sqlite":
-        db.executescript(SQLITE_SCHEMA)
-    else:
-        db.executescript(PG_SCHEMA)
+    """Ensure database schema exists."""
+    db.executescript(PG_SCHEMA)
     db.commit()
     ensure_columns(db)
 
 
 def ensure_columns(db: Db) -> None:
-    if db.kind == "sqlite":
-        cur = db.execute("PRAGMA table_info(flights)")
-        columns = {row[1] for row in cur.fetchall()}
-        if "duplicate_of" not in columns:
-            db.execute("ALTER TABLE flights ADD COLUMN duplicate_of TEXT")
-            db.commit()
-        if "updated_at" not in columns:
-            db.execute("ALTER TABLE flights ADD COLUMN updated_at TEXT")
-            db.commit()
-        return
+    """Add legacy columns if missing (for backwards compatibility)."""
     db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS duplicate_of TEXT")
     db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS updated_at TEXT")
     db.commit()
@@ -1296,8 +1234,8 @@ def main() -> int:
     parser.add_argument("--years", default="")
     parser.add_argument("--source", default="skygr")
     parser.add_argument("--cookie", default="")
-    parser.add_argument("--db-path", default=os.path.join("data", "igc", "index.sqlite"))
-    parser.add_argument("--db-url", default=os.environ.get("IGC_DB_URL", ""))
+    parser.add_argument("--db-url", default=os.environ.get("IGC_DB_URL", "postgresql://paraglidable:paraglidable@localhost:5432/paraglidable"),
+                       help="PostgreSQL connection URL (default: from IGC_DB_URL env or localhost)")
     parser.add_argument("--out-dir", default=os.path.join("data", "igc", "skygr"))
     parser.add_argument("--max-pages", type=int, default=3)
     parser.add_argument("--max-flights", type=int, default=200)
@@ -1322,9 +1260,7 @@ def main() -> int:
 
     signal.signal(signal.SIGINT, request_stop)
 
-    db = connect_db(args.db_url, args.db_path)
-    if db.kind == "sqlite":
-        ensure_dirs(os.path.dirname(args.db_path))
+    db = connect_db(args.db_url, None)
     ensure_db(db)
 
     if args.force_ipv4:

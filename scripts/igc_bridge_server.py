@@ -3,7 +3,6 @@ import argparse
 import json
 import os
 import re
-import sqlite3
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Optional, Tuple
@@ -14,61 +13,6 @@ try:
 except Exception:
     psycopg = None
 
-
-SQLITE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS flights (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    flight_id TEXT NOT NULL,
-    show_url TEXT,
-    igc_url TEXT,
-    igc_path TEXT,
-    file_size INTEGER,
-    sha256 TEXT,
-    duplicate_of TEXT,
-    status TEXT NOT NULL,
-    error_msg TEXT,
-    retry_count INTEGER NOT NULL DEFAULT 0,
-    downloaded_at TEXT,
-    updated_at TEXT,
-    flight_date TEXT,
-    pilot TEXT,
-    glider TEXT,
-    glider_class TEXT,
-    takeoff_lat REAL,
-    takeoff_lon REAL,
-    takeoff_name TEXT,
-    duration_sec INTEGER,
-    distance_km REAL,
-    score REAL,
-    track_points INTEGER,
-    has_baro_alt INTEGER,
-    has_gps_alt INTEGER
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_flights_source_id ON flights(source, flight_id);
-CREATE INDEX IF NOT EXISTS idx_flights_status ON flights(status);
-CREATE INDEX IF NOT EXISTS idx_flights_flight_date ON flights(flight_date);
-CREATE INDEX IF NOT EXISTS idx_flights_sha256 ON flights(sha256);
-
-CREATE TABLE IF NOT EXISTS crawl_state (
-    source TEXT PRIMARY KEY,
-    list_url TEXT,
-    next_list_url TEXT,
-    last_seen_flight_id TEXT,
-    updated_at TEXT
-);
-CREATE TABLE IF NOT EXISTS crawl_state_list (
-    source TEXT NOT NULL,
-    list_key TEXT NOT NULL,
-    list_url TEXT,
-    next_list_url TEXT,
-    last_seen_flight_id TEXT,
-    year INTEGER,
-    updated_at TEXT,
-    PRIMARY KEY (source, list_key)
-);
-CREATE INDEX IF NOT EXISTS idx_crawl_state_list_year ON crawl_state_list(year);
-"""
 
 PG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS flights (
@@ -135,19 +79,18 @@ def log(msg: str) -> None:
 
 
 class Db:
-    def __init__(self, conn: Any, kind: str) -> None:
+    """PostgreSQL database wrapper."""
+
+    def __init__(self, conn: Any) -> None:
         self.conn = conn
-        self.kind = kind
 
     def execute(self, sql: str, params: Tuple[Any, ...] = ()) -> Any:
-        if self.kind == "postgres":
-            sql = sql.replace("?", "%s")
+        """Execute SQL with ? placeholders (converted to %s for PostgreSQL)."""
+        sql = sql.replace("?", "%s")
         return self.conn.execute(sql, params)
 
     def executescript(self, script: str) -> None:
-        if self.kind == "sqlite":
-            self.conn.executescript(script)
-            return
+        """Execute multi-statement SQL script."""
         for stmt in script.split(";"):
             stmt = stmt.strip()
             if stmt:
@@ -160,36 +103,31 @@ class Db:
         self.conn.close()
 
 
-def connect_db(db_url: str, db_path: str) -> Db:
-    if db_url:
-        if psycopg is None:
-            raise RuntimeError("psycopg is required for postgres. Install with: pip install psycopg[binary]")
-        conn = psycopg.connect(db_url)
-        return Db(conn, "postgres")
-    conn = sqlite3.connect(db_path)
-    return Db(conn, "sqlite")
+def connect_db(db_url: str, db_path: str = None) -> Db:
+    """Connect to PostgreSQL database.
+
+    Args:
+        db_url: PostgreSQL connection URL
+        db_path: Ignored (kept for backwards compatibility)
+
+    Returns:
+        Db wrapper instance
+    """
+    if psycopg is None:
+        raise RuntimeError("psycopg is required. Install with: pip install psycopg[binary]")
+    conn = psycopg.connect(db_url)
+    return Db(conn)
 
 
 def ensure_db(db: Db) -> None:
-    if db.kind == "sqlite":
-        db.executescript(SQLITE_SCHEMA)
-    else:
-        db.executescript(PG_SCHEMA)
+    """Ensure database schema exists."""
+    db.executescript(PG_SCHEMA)
     db.commit()
     ensure_columns(db)
 
 
 def ensure_columns(db: Db) -> None:
-    if db.kind == "sqlite":
-        cur = db.execute("PRAGMA table_info(flights)")
-        columns = {row[1] for row in cur.fetchall()}
-        if "duplicate_of" not in columns:
-            db.execute("ALTER TABLE flights ADD COLUMN duplicate_of TEXT")
-            db.commit()
-        if "updated_at" not in columns:
-            db.execute("ALTER TABLE flights ADD COLUMN updated_at TEXT")
-            db.commit()
-        return
+    """Add legacy columns if missing (for backwards compatibility)."""
     db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS duplicate_of TEXT")
     db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS updated_at TEXT")
     db.commit()
@@ -331,7 +269,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         qs = parse_qs(parsed.query)
         source = qs.get("source", [self.server.default_source])[0]
         log(f"stats request: source={source}")
-        db = connect_db(self.server.db_url, self.server.db_path)
+        db = connect_db(self.server.db_url, None)
         try:
             ensure_db(db)
             cur = db.execute("SELECT COUNT(*) FROM flights WHERE source=?", (source,))
@@ -386,7 +324,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         statuses = ("new", "failed") if include_failed else ("new",)
         log(f"resolve next: source={source} limit={limit} include_failed={include_failed}")
 
-        db = connect_db(self.server.db_url, self.server.db_path)
+        db = connect_db(self.server.db_url, None)
         items = []
         try:
             ensure_db(db)
@@ -423,7 +361,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         errors = 0
         log(f"resolve request: items={len(items)} default_source={default_source}")
 
-        db = connect_db(self.server.db_url, self.server.db_path)
+        db = connect_db(self.server.db_url, None)
         try:
             ensure_db(db)
             for raw in items:
@@ -482,7 +420,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         statuses = ("queued", "failed") if include_failed else ("queued",)
         log(f"downloads next: source={source} limit={limit} include_failed={include_failed}")
 
-        db = connect_db(self.server.db_url, self.server.db_path)
+        db = connect_db(self.server.db_url, None)
         items = []
         try:
             ensure_db(db)
@@ -547,7 +485,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         errors = 0
         log(f"links request: items={len(items)} default_source={default_source}")
 
-        db = connect_db(self.server.db_url, self.server.db_path)
+        db = connect_db(self.server.db_url, None)
         try:
             ensure_db(db)
             for raw in items:
@@ -602,7 +540,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
         errors = 0
         log(f"downloads request: items={len(items)} default_source={default_source}")
 
-        db = connect_db(self.server.db_url, self.server.db_path)
+        db = connect_db(self.server.db_url, None)
         try:
             ensure_db(db)
             for raw in items:
@@ -657,26 +595,25 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Local bridge server to save Leonardo links into a database.")
-    parser.add_argument("--db-path", default="data/igc/index.sqlite")
-    parser.add_argument("--db-url", default=os.environ.get("IGC_DB_URL", ""))
+    parser.add_argument("--db-url",
+                       default=os.environ.get("IGC_DB_URL", "postgresql://paraglidable:paraglidable@localhost:5432/paraglidable"),
+                       help="PostgreSQL connection URL (default: from IGC_DB_URL env or localhost)")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--source", default="paraplan")
     args = parser.parse_args()
 
-    db = connect_db(args.db_url, args.db_path)
+    db = connect_db(args.db_url, None)
     try:
         ensure_db(db)
     finally:
         db.close()
 
     server = ThreadingHTTPServer((args.host, args.port), BridgeHandler)
-    server.db_path = args.db_path
     server.db_url = args.db_url
     server.default_source = args.source
     log(f"bridge server listening on http://{args.host}:{args.port}")
-    target = args.db_url if args.db_url else args.db_path
-    log(f"bridge server db: {target}")
+    log(f"bridge server db: {args.db_url}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
