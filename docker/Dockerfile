@@ -29,3 +29,9 @@ RUN sudo -H pip install pygrib
 #RUN sudo -H pip install https://github.com/matplotlib/basemap/archive/master.zip
 RUN sudo -H pip install basemap
 
+# IGC parsing dependencies (for parse_igc_with_libs.py)
+RUN sudo -H pip install libigc aerofiles numpy scipy
+
+# Database connectivity for PKL dataset builder
+RUN sudo -H pip install 'psycopg[binary]'
+

@@ -9,11 +9,12 @@
 ### Две модели:
 
 1. **CELLS Model** - Прогноз пригодности для каждой 1°x1° ячейки
-   - Использует **55 ячеек** (первые 55 из `sorted_cells_latlon.pkl`)
+   - Использует **динамически определённое количество ячеек** (из `sorted_cells_latlon.pkl`)
+   - По умолчанию: 55 ячеек для полного датасета
    - Предсказывает: flyability, crossability, wind-flyability, humidity-flyability
 
 2. **SPOTS Model** - Прогноз для конкретных точек взлёта
-   - Использует **80 ячеек** (первые 80)
+   - Использует **все доступные ячейки** из датасета
    - Предсказывает flyability для каждого spot
 
 ### Входные данные (метеорология):
@@ -127,20 +128,27 @@ Cell 54: lat=45.0°N, lon=9.0°E   (северная Италия)
 
 **Файл:** `neural_network/train.py`
 
-```python
-# Использует 55 ячеек
-self.all_cells = list(range(55))
+**Динамическое определение количества ячеек:**
 
-# Процесс:
-# 1. Для каждой ячейки:
-#    - Загрузить погодные данные для дней с полётами
-#    - Загрузить данные о полётах
-#    - Обучить модель предсказывать вероятность полёта
-#
-# 2. Создаётся population_alt_cell_XX.npy для каждой ячейки
-#    - Содержит 5 значений (по одному на высоту)
-#    - Хранится в bin/models/CLASSIFICATION_1.0.0/weights/
+```python
+# Train класс автоматически определяет количество ячеек из данных
+from inc.dataset import DatasetParams
+dataset_params = DatasetParams()
+nb_cells = dataset_params.nb_cells  # Читает из sorted_cells.pkl
+
+train = Train(model_dir, ModelType.CELLS, ProblemFormulation.CLASSIFICATION)
+# self.all_cells автоматически заполняется: [0, 1, 2, ..., nb_cells-1]
 ```
+
+**Процесс:**
+1. Для каждой ячейки:
+   - Загрузить погодные данные для дней с полётами
+   - Загрузить данные о полётах
+   - Обучить модель предсказывать вероятность полёта
+
+2. Создаётся `population_alt_cell_XX.npy` для каждой ячейки:
+   - Содержит 5 значений (по одному на высоту)
+   - Хранится в `bin/models/CLASSIFICATION_1.0.0/weights/`
 
 **Population weights** (`population_alt_cell_XX.npy`):
 - Размер: (5,) - одно значение на высоту
@@ -149,15 +157,44 @@ self.all_cells = list(range(55))
 
 ### Этап 3: Обучение Spots Model
 
+**Динамическое определение:**
+
 ```python
-# Использует 80 ячеек
-self.all_cells = list(range(80))
+# Использует все доступные ячейки из датасета
+from inc.dataset import DatasetParams
+dataset_params = DatasetParams()
+nb_cells = dataset_params.nb_cells
 
 # Процесс:
-# 1. Для каждого spot в ячейке:
+# 1. Для каждого spot в ячейке (c in range(nb_cells)):
 #    - Обучить модель предсказывать flyability
 #    - Учесть специфику spot (экспозиция, рельеф и т.д.)
 ```
+
+### Тестирование на малых датасетах
+
+**Файл:** `neural_network/test_with_small_dataset.py`
+
+Для тестирования pipeline на малых датасетах (например, 6 ячеек):
+
+```python
+from inc.bin_obj import BinObj
+BinObj.obj_path = "./bin/data_test"  # Малый датасет
+
+from train import Train
+from inc.model import ModelType, ProblemFormulation
+
+# Train автоматически определяет nb_cells из data_test
+train = Train("./bin/models/TEST", ModelType.CELLS, ProblemFormulation.CLASSIFICATION)
+train.set_trained([3, 4], super_resolution=1, load_weights=False)
+train.train((0.01, 0.001, 5), use_validation_set=False)
+train.save()
+```
+
+**Преимущества:**
+- Не требуется monkey patching или изменение кода
+- Работает с любым размером датасета
+- Автоматически адаптируется к данным
 
 ---
 
@@ -346,14 +383,26 @@ with open('neural_network/bin/data/sorted_cells_latlon.pkl', 'wb') as f:
 ## Полезные команды
 
 ```bash
-# Запуск обучения
+# Запуск обучения (полный датасет)
 cd neural_network/
 python train.py
+
+# Тестирование на малом датасете
+python test_with_small_dataset.py
 
 # Генерация прогноза
 python forecast.py
 
-# Проверка ячеек
+# Проверка ячеек и их количества
+python3 -c "
+from inc.bin_obj import BinObj
+from inc.dataset import DatasetParams
+params = DatasetParams()
+print(f'nb_cells: {params.nb_cells}')
+print(f'nb_days: {params.nb_days}')
+"
+
+# Проверка ячеек в PKL файле
 python3 -c "import pickle; cells=pickle.load(open('neural_network/bin/data/sorted_cells_latlon.pkl','rb')); print(len(cells), cells[:5])"
 
 # Проверка population weights
