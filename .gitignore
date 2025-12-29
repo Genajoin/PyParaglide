@@ -18,3 +18,4 @@ scripts/xc_score/__pycache__/
 CLAUDE.md
 .vscode/*
 paraglidable.session.sql
+.env

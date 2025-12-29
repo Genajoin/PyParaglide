@@ -35,3 +35,6 @@ RUN sudo -H pip install libigc aerofiles numpy scipy
 # Database connectivity for PKL dataset builder
 RUN sudo -H pip install 'psycopg[binary]'
 
+# CLI framework
+RUN sudo -H pip install 'typer>=0.9.0' 'python-dotenv>=0.19.0'
+
