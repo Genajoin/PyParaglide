@@ -169,32 +169,6 @@ def update_flights_from_igc(
     # Подготовить аргументы для worker-ов
     parse_args = [(row[0], row[1]) for row in rows]
 
-    # Параллельный парсинг с корректной обработкой прерывания и прогресс-баром
-    pool = Pool(processes=workers)
-    try:
-        results = []
-        success_count = 0
-        error_count = 0
-
-        with tqdm(total=len(parse_args), desc="Parsing", unit="flight") as pbar:
-            for result in pool.imap_unordered(parse_single_flight, parse_args):
-                results.append(result)
-                if result[2]:  # error
-                    error_count += 1
-                    pbar.set_postfix(errors=error_count)
-                else:
-                    success_count += 1
-                pbar.update(1)
-
-    except KeyboardInterrupt:
-        print("\nInterrupted! Waiting for current tasks to complete...", flush=True)
-        raise
-    finally:
-        # close() предотвращает добавление новых задач
-        # join() ждёт завершения текущих задач
-        pool.close()
-        pool.join()
-
     # Подготовить SQL для обновления
     update_sql = """
         UPDATE flights
@@ -217,60 +191,69 @@ def update_flights_from_igc(
         WHERE source=? AND flight_id=?
     """
 
-    # Обновить БД результатами
+    # Параллельный парсинг с ИНКРЕМЕНТАЛЬНОЙ записью в БД
+    pool = Pool(processes=workers)
     updated_count = 0
+    parse_error_count = 0
     db_error_count = 0
-    parse_error_count = sum(1 for _, _, e in results if e)
 
-    if parse_error_count > 0:
-        print(f"Parse errors: {parse_error_count} flights", flush=True)
+    try:
+        with tqdm(total=len(parse_args), desc="Processing", unit="flight") as pbar:
+            for result in pool.imap_unordered(parse_single_flight, parse_args):
+                flight_id, meta, error = result
+                pbar.update(1)
 
-    with tqdm(total=len(results), desc="Updating DB", unit="rec") as pbar:
-        for flight_id, meta, error in results:
-            pbar.update(1)
+                if error:
+                    parse_error_count += 1
+                    pbar.set_postfix(parsed=updated_count, errors=parse_error_count)
+                    continue
 
-            if error:
-                continue  # уже посчитали выше
-
-            try:
-                db.execute(
-                    update_sql,
-                    (
-                        meta.get("takeoff_datetime"),
-                        meta.get("landing_datetime"),
-                        meta.get("takeoff_alt"),
-                        meta.get("max_alt"),
-                        meta.get("plaf"),
-                        meta.get("min_alt"),
-                        meta.get("distance_km"),
-                        meta.get("xc_score"),
-                        meta.get("xc_distance_km"),
-                        meta.get("xc_type"),
-                        meta.get("thermal_count"),
-                        meta.get("glide_count"),
-                        meta.get("avg_climb_rate"),
-                        meta.get("max_climb_rate"),
-                        source,
-                        flight_id
+                # Записать в БД сразу после парсинга
+                try:
+                    db.execute(
+                        update_sql,
+                        (
+                            meta.get("takeoff_datetime"),
+                            meta.get("landing_datetime"),
+                            meta.get("takeoff_alt"),
+                            meta.get("max_alt"),
+                            meta.get("plaf"),
+                            meta.get("min_alt"),
+                            meta.get("distance_km"),
+                            meta.get("xc_score"),
+                            meta.get("xc_distance_km"),
+                            meta.get("xc_type"),
+                            meta.get("thermal_count"),
+                            meta.get("glide_count"),
+                            meta.get("avg_climb_rate"),
+                            meta.get("max_climb_rate"),
+                            source,
+                            flight_id
+                        )
                     )
-                )
 
-                updated_count += 1
+                    updated_count += 1
 
-                # Commit каждые 100 записей
-                if updated_count % 100 == 0:
-                    db.commit()
-                    pbar.set_postfix(committed=updated_count)
+                    # Commit каждые 100 записей для производительности
+                    if updated_count % 100 == 0:
+                        db.commit()
+                        pbar.set_postfix(parsed=updated_count, errors=parse_error_count)
 
-            except Exception as e:
-                db_error_count += 1
-                print(f"Error updating flight {flight_id}: {e}", file=sys.stderr, flush=True)
-                continue
+                except Exception as e:
+                    db_error_count += 1
+                    print(f"\nError updating flight {flight_id}: {e}", file=sys.stderr, flush=True)
+                    continue
 
-    # Финальный commit
-    db.commit()
+    except KeyboardInterrupt:
+        print("\nInterrupted! Committing parsed data...", flush=True)
+    finally:
+        # Финальный commit для оставшихся записей
+        db.commit()
+        # Остановить pool
+        pool.close()
+        pool.join()
 
-    print(f"Successfully updated: {updated_count} flights", flush=True)
+    print(f"\nSuccessfully updated: {updated_count} flights", flush=True)
     if parse_error_count > 0:
         print(f"Parse errors: {parse_error_count} flights", flush=True)
     if db_error_count > 0:

@@ -164,6 +164,11 @@ def parse_with_libigc(file_path: str) -> Dict[str, Any]:
     """
     flight = LibIGCFlight.create_from_file(file_path)
 
+    # Check if flight is valid and has takeoff/landing fixes
+    if not flight.valid or not hasattr(flight, 'takeoff_fix') or not hasattr(flight, 'landing_fix'):
+        # Flight parsing failed, raise exception to trigger fallback
+        raise ValueError(f"Flight validation failed: {', '.join(flight.notes) if hasattr(flight, 'notes') else 'unknown error'}")
+
     # Extract basic metadata
     takeoff = flight.takeoff_fix
     landing = flight.landing_fix

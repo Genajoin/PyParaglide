@@ -126,11 +126,41 @@ def ensure_db(db: Db) -> None:
     ensure_columns(db)
 
 
+def _column_exists(db: Db, table_name: str, column_name: str) -> bool:
+    """Check if a column exists in a table."""
+    cur = db.execute(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name=? AND column_name=?)",
+        (table_name, column_name),
+    )
+    result = cur.fetchone()[0]
+    return result is True or result == "True" or result == 1
+
+
 def ensure_columns(db: Db) -> None:
     """Add legacy columns if missing (for backwards compatibility)."""
-    db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS duplicate_of TEXT")
-    db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS updated_at TEXT")
+    if not _column_exists(db, "flights", "duplicate_of"):
+        db.execute("ALTER TABLE flights ADD COLUMN duplicate_of TEXT")
+    if not _column_exists(db, "flights", "updated_at"):
+        db.execute("ALTER TABLE flights ADD COLUMN updated_at TEXT")
     db.commit()
+
+
+def _table_exists(db: Db, table_name: str) -> bool:
+    """Check if a table exists."""
+    cur = db.execute(
+        "SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_name=?)",
+        (table_name,),
+    )
+    result = cur.fetchone()[0]
+    return result is True or result == "True" or result == 1
+
+
+def ensure_db(db: Db) -> None:
+    """Ensure database schema exists. Only creates schema if tables don't exist yet."""
+    if not _table_exists(db, "flights"):
+        db.executescript(PG_SCHEMA)
+        db.commit()
+    ensure_columns(db)
 
 
 def db_upsert_flight(db: Db, source: str, flight_id: str, show_url: Optional[str]) -> None:
@@ -238,15 +268,18 @@ class BridgeHandler(BaseHTTPRequestHandler):
     server_version = "IGCBridge/0.1"
 
     def _send_json(self, status_code: int, payload: Dict[str, Any]) -> None:
-        data = json.dumps(payload).encode("utf-8")
-        self.send_response(status_code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "content-type")
-        self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "content-type")
+            self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError) as e:
+            log(f"Client disconnected early: {type(e).__name__}")
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -271,7 +304,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
         log(f"stats request: source={source}")
         db = connect_db(self.server.db_url, None)
         try:
-            ensure_db(db)
             cur = db.execute("SELECT COUNT(*) FROM flights WHERE source=?", (source,))
             total = int(cur.fetchone()[0])
             cur = db.execute(
@@ -327,7 +359,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
         db = connect_db(self.server.db_url, None)
         items = []
         try:
-            ensure_db(db)
             placeholders = ", ".join(["?"] * len(statuses))
             cur = db.execute(
                 f"""
@@ -363,7 +394,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         db = connect_db(self.server.db_url, None)
         try:
-            ensure_db(db)
             for raw in items:
                 if not isinstance(raw, dict):
                     errors += 1
@@ -423,7 +453,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
         db = connect_db(self.server.db_url, None)
         items = []
         try:
-            ensure_db(db)
             placeholders = ", ".join(["?"] * len(statuses))
             cur = db.execute(
                 f"""
@@ -487,7 +516,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         db = connect_db(self.server.db_url, None)
         try:
-            ensure_db(db)
             for raw in items:
                 if not isinstance(raw, dict):
                     errors += 1
@@ -542,7 +570,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
         db = connect_db(self.server.db_url, None)
         try:
-            ensure_db(db)
             for raw in items:
                 if not isinstance(raw, dict):
                     errors += 1
@@ -594,6 +621,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
+    import time
     parser = argparse.ArgumentParser(description="Local bridge server to save Leonardo links into a database.")
     parser.add_argument("--db-url",
                        default=os.environ.get("IGC_DB_URL", "postgresql://paraglidable:paraglidable@localhost:5432/paraglidable"),
@@ -603,10 +631,15 @@ def main() -> int:
     parser.add_argument("--source", default="paraplan")
     args = parser.parse_args()
 
+    t0 = time.time()
     db = connect_db(args.db_url, None)
+    log(f"db connected in {time.time() - t0:.2f}s")
+
+    t0 = time.time()
     try:
         ensure_db(db)
     finally:
+        log(f"ensure_db done in {time.time() - t0:.2f}s")
         db.close()
 
     server = ThreadingHTTPServer((args.host, args.port), BridgeHandler)
