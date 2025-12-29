@@ -196,8 +196,20 @@ def ensure_db(db: Db) -> None:
 
 def ensure_columns(db: Db) -> None:
     """Add legacy columns if missing (for backwards compatibility)."""
-    db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS duplicate_of TEXT")
-    db.execute("ALTER TABLE flights ADD COLUMN IF NOT EXISTS updated_at TEXT")
+    # Check existing columns via information_schema (much faster than ALTER IF NOT EXISTS on large tables)
+    cur = db.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name='flights'
+        """
+    )
+    existing_columns = {row[0] for row in cur.fetchall()}
+
+    if "duplicate_of" not in existing_columns:
+        db.execute("ALTER TABLE flights ADD COLUMN duplicate_of TEXT")
+    if "updated_at" not in existing_columns:
+        db.execute("ALTER TABLE flights ADD COLUMN updated_at TEXT")
     db.commit()
 
 
@@ -294,16 +306,23 @@ def db_get_crawl_state_list(
     return row[0], row[1]
 
 
-def db_mark_failed(db: Db, source: str, flight_id: str, error_msg: str) -> None:
+def db_mark_failed(db: Db, source: str, flight_id: str, error_msg: str, is_permanent: bool = False) -> None:
     now = utcnow()
+    status = 'missing' if is_permanent else 'failed'
     db.execute(
         """
         UPDATE flights
-        SET status='failed', error_msg=?, retry_count=retry_count+1, updated_at=?
+        SET status=?, error_msg=?, retry_count=retry_count+1, updated_at=?
         WHERE source=? AND flight_id=?
         """,
-        (error_msg[:500], now, source, flight_id),
+        (status, error_msg[:500], now, source, flight_id),
     )
+
+
+def is_permanent_error(error_msg: str) -> bool:
+    """Check if error is permanent (4xx HTTP errors)."""
+    # Match HTTP 4xx errors: 400, 401, 403, 404, 410, etc.
+    return bool(re.search(r'4\d{2}\s+Client Error', error_msg))
 
 
 def db_update_after_download(
@@ -880,12 +899,13 @@ def build_dest_path(out_dir: str, flight_id: str, filename: str, flight_date: Op
     return os.path.join(dest_dir, filename)
 
 
-def iter_pending_flights(db: Db, source: str, max_retries: int) -> Iterable[Tuple[str, str]]:
+def iter_pending_flights(db: Db, source: str, max_retries: int, include_missing: bool = False) -> Iterable[Tuple[str, str]]:
+    statuses = ('new','failed','queued','downloading','missing') if include_missing else ('new','failed','queued','downloading')
     cur = db.execute(
-        """
+        f"""
         SELECT flight_id, show_url
         FROM flights
-        WHERE source=? AND status IN ('new','failed','queued','downloading') AND retry_count < ? AND igc_url IS NOT NULL
+        WHERE source=? AND status IN {statuses} AND retry_count < ? AND igc_url IS NOT NULL
         ORDER BY id ASC
         """,
         (source, max_retries),
@@ -894,12 +914,13 @@ def iter_pending_flights(db: Db, source: str, max_retries: int) -> Iterable[Tupl
         yield row[0], row[1]
 
 
-def count_pending_flights(db: Db, source: str, max_retries: int) -> int:
+def count_pending_flights(db: Db, source: str, max_retries: int, include_missing: bool = False) -> int:
+    statuses = ('new','failed','queued','downloading','missing') if include_missing else ('new','failed','queued','downloading')
     cur = db.execute(
-        """
+        f"""
         SELECT COUNT(*)
         FROM flights
-        WHERE source=? AND status IN ('new','failed','queued','downloading') AND retry_count < ? AND igc_url IS NOT NULL
+        WHERE source=? AND status IN {statuses} AND retry_count < ? AND igc_url IS NOT NULL
         """,
         (source, max_retries),
     )
@@ -988,6 +1009,7 @@ def process_flights(
     source: str,
     max_retries: int,
     max_flights: Optional[int],
+    include_missing: bool = False,
 ) -> int:
     ensure_dirs(out_dir)
     incoming_dir = os.path.join(out_dir, "_incoming")
@@ -995,12 +1017,12 @@ def process_flights(
 
     total_count: Optional[int]
     if max_flights is None:
-        total_count = count_pending_flights(db, source, max_retries)
+        total_count = count_pending_flights(db, source, max_retries, include_missing)
     else:
         total_count = max_flights
 
     count = 0
-    for flight_id, show_url in iter_pending_flights(db, source, max_retries):
+    for flight_id, show_url in iter_pending_flights(db, source, max_retries, include_missing):
         if STOP_REQUESTED:
             break
         if max_flights is not None and count >= max_flights:
@@ -1071,9 +1093,12 @@ def process_flights(
             count += 1
             print(f"{prefix}: downloaded", flush=True)
         except Exception as exc:
-            db_mark_failed(db, source, flight_id, str(exc))
+            error_msg = str(exc)
+            permanent = is_permanent_error(error_msg)
+            db_mark_failed(db, source, flight_id, error_msg, is_permanent=permanent)
             db.commit()
-            print(f"{prefix}: failed ({exc})", flush=True)
+            status_label = 'missing' if permanent else 'failed'
+            print(f"{prefix}: {status_label} ({exc})", flush=True)
     return count
 
 
@@ -1112,9 +1137,12 @@ def process_links(
             count += 1
             print(f"link {flight_id}: queued", flush=True)
         except Exception as exc:
-            db_mark_failed(db, source, flight_id, str(exc))
+            error_msg = str(exc)
+            permanent = is_permanent_error(error_msg)
+            db_mark_failed(db, source, flight_id, error_msg, is_permanent=permanent)
             db.commit()
-            print(f"link {flight_id}: failed ({exc})", flush=True)
+            status_label = 'missing' if permanent else 'failed'
+            print(f"link {flight_id}: {status_label} ({exc})", flush=True)
     return count
 
 
@@ -1246,6 +1274,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--retries", type=int, default=3)
     parser.add_argument("--max-retries", type=int, default=5)
+    parser.add_argument("--retry-missing", action="store_true", help="Retry flights marked as 'missing'")
     parser.add_argument("--list-only", action="store_true")
     parser.add_argument("--links-only", action="store_true")
     parser.add_argument("--download-only", action="store_true")
@@ -1385,6 +1414,7 @@ def main() -> int:
                 source=args.source,
                 max_retries=args.max_retries,
                 max_flights=max_flights,
+                include_missing=args.retry_missing,
             )
             print(f"downloaded+parsed: {processed} flights")
 
