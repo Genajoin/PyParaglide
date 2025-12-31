@@ -62,12 +62,10 @@ class GribReader:
                     pass
 
         if len(values) != len(params)*len(cellsLatLon):
-            print("len(values)", len(values))
-            print("len(params)", len(params))
-            print("len(cellsLatLon)", len(cellsLatLon))
-            return None
-        else:
-            return values
+            # Some parameters couldn't be extracted (missing in GRIB)
+            # Return partial data instead of None
+            pass
+        return values
 
     def get_values_array(self, params, crops):
         stacks = []

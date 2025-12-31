@@ -23,8 +23,10 @@ import math
 import os
 import struct
 import sys
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
+from pathlib import Path
 from typing import List, Tuple, Optional, Dict
+from collections import defaultdict
 
 # Add neural_network path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'neural_network'))
@@ -205,7 +207,7 @@ class PKLDatasetBuilder:
 
         return None
 
-    def build_meteo_days(self, date_range: Optional[Tuple[date, date]] = None) -> None:
+    def build_meteo_days(self, training_dates: Optional[str] = None) -> None:
         """
         Step 2: Scan GFS directory for available days.
 
@@ -214,16 +216,22 @@ class PKLDatasetBuilder:
         - meteo_params.pkl: List[(hour, param_name, level_list)]
 
         Args:
-            date_range: Optional (start_date, end_date) to limit scan
+            training_dates: Date ranges from TRAINING_DATES env var
+                           Format: "2021-06-01:2021-08-31,2022-06-01:2022-08-31"
         """
         print("\n=== Step 2: Scanning GFS data ===", flush=True)
 
         if not os.path.exists(self.gfs_dir):
             print(f"  ERROR: GFS directory not found: {self.gfs_dir}", flush=True)
+            self._suggest_download()
             sys.exit(1)
 
+        # Parse training dates
+        date_ranges = self._parse_training_dates(training_dates) if training_dates else None
+
         # Scan for available days with complete GFS data (6, 12, 18 UTC)
-        meteo_days = []
+        all_meteo_days = {}
+        missing_dates = []
 
         # Scan all month directories
         if os.path.exists(self.gfs_dir):
@@ -259,9 +267,34 @@ class PKLDatasetBuilder:
                         year_val = int(date_str[:4])
                         month_val = int(date_str[4:6])
                         day_val = int(date_str[6:8])
-                        meteo_days.append(date(year_val, month_val, day_val))
+                        day_date = date(year_val, month_val, day_val)
+                        all_meteo_days[day_date] = True
 
-        print(f"  Found {len(meteo_days)} days with complete GFS data", flush=True)
+        print(f"  Found {len(all_meteo_days)} days with complete GFS data on disk", flush=True)
+
+        # Filter by training dates if specified
+        if date_ranges:
+            meteo_days = []
+            for day in all_meteo_days:
+                if self._is_date_in_ranges(day, date_ranges):
+                    meteo_days.append(day)
+
+            # Find missing dates
+            for start, end in date_ranges:
+                current = start
+                while current <= end:
+                    if current not in all_meteo_days:
+                        missing_dates.append(current)
+                    current += timedelta(days=1)
+
+            print(f"  Filtered to {len(meteo_days)} days (TRAINING_DATES)", flush=True)
+
+            if missing_dates:
+                print(f"\n  WARNING: {len(missing_dates)} days from TRAINING_DATES are missing GFS data!", flush=True)
+                self._show_missing_dates_summary(missing_dates)
+                self._suggest_download(missing_dates)
+        else:
+            meteo_days = sorted(all_meteo_days.keys())
 
         self.meteo_days = meteo_days
         self.nb_days = len(meteo_days)
@@ -271,6 +304,61 @@ class PKLDatasetBuilder:
         print("  Building meteo_params...", flush=True)
         meteo_params = self.build_meteo_params()
         self.save_pkl("meteo_params", meteo_params)
+
+    def _parse_training_dates(self, dates_str: str) -> List[Tuple[date, date]]:
+        """Parse TRAINING_DATES string into list of (start, end) tuples."""
+        ranges = []
+        for part in dates_str.split(','):
+            part = part.strip()
+            if ':' not in part:
+                continue
+            start_str, end_str = part.split(':')
+            start = datetime.strptime(start_str.strip(), '%Y-%m-%d').date()
+            end = datetime.strptime(end_str.strip(), '%Y-%m-%d').date()
+            ranges.append((start, end))
+        return sorted(ranges)
+
+    def _is_date_in_ranges(self, target_date: date, ranges: List[Tuple[date, date]]) -> bool:
+        """Check if date falls within any of the date ranges."""
+        for start, end in ranges:
+            if start <= target_date <= end:
+                return True
+        return False
+
+    def _show_missing_dates_summary(self, missing_dates: List[date]) -> None:
+        """Show summary of missing dates grouped by month."""
+        by_month = defaultdict(list)
+        for d in missing_dates:
+            by_month[(d.year, d.month)].append(d)
+
+        print("  Missing by month:", flush=True)
+        for (year, month), dates in sorted(by_month.items()):
+            print(f"    {year}-{month:02d}: {len(dates)} days", flush=True)
+
+    def _suggest_download(self, missing_dates: Optional[List[date]] = None) -> None:
+        """Suggest download commands for missing GFS data."""
+        if not missing_dates:
+            missing_dates = []
+
+        # Group by month
+        by_month = defaultdict(set)
+        for d in missing_dates:
+            by_month[(d.year, d.month)].add(d.day)
+
+        if not by_month:
+            print("\n  To download GFS data, see:", flush=True)
+            print("    - scripts/download_GFS.py (for AWS S3, 2021+)", flush=True)
+            print("    - scripts/download_GFS_rda.py (for RDA, requires registration)", flush=True)
+        else:
+            print("\n  To download missing GFS data:", flush=True)
+            for (year, month), days in sorted(by_month.items()):
+                start = date(year, month, 1)
+                end = date(year, month, 28)  # Safe end of month
+                print(f"\n    # {year}-{month:02d}", flush=True)
+                print(f"    python3 scripts/download_GFS.py \\", flush=True)
+                print(f"      --start-date {start.strftime('%Y-%m-%d')} \\", flush=True)
+                print(f"      --end-date {end.strftime('%Y-%m-%d')} \\", flush=True)
+                print(f"      --data-dir {self.gfs_dir} --hours 6,12,18 --filter", flush=True)
 
     def build_meteo_params(self) -> List:
         """
@@ -312,6 +400,7 @@ class PKLDatasetBuilder:
 
         Creates:
         - meteo_content_by_cell_day.pkl: np.array[nb_days*nb_cells, 195]
+          where 195 = 65 parameters × 3 time steps (06, 12, 18 UTC)
         """
         print("\n=== Step 3: Extracting weather data ===", flush=True)
 
@@ -321,12 +410,91 @@ class PKLDatasetBuilder:
             self.save_pkl("meteo_content_by_cell_day", matrix)
             return
 
-        # TODO: Implement actual GRIB extraction
-        # For now, create placeholder
-        matrix = np.zeros((self.nb_days * self.nb_cells, 195), dtype=np.float32)
+        if not HAS_GRIB:
+            print("  WARNING: GribReader not available. Creating zeros matrix.", flush=True)
+            print("  Install pygrib for actual weather data extraction.", flush=True)
+            matrix = np.zeros((self.nb_days * self.nb_cells, 195), dtype=np.float32)
+            self.save_pkl("meteo_content_by_cell_day", matrix)
+            return
 
-        print(f"  Matrix shape: {matrix.shape}", flush=True)
-        self.save_pkl("meteo_content_by_cell_day", matrix)
+        # Build parameter list for 65 parameters (without hour dimension)
+        # Format: [(name, [(level_type, level_value), ...]), ...]
+        grib_params = []
+
+        # Entire atmosphere parameters (1 level each)
+        for param in ['Precipitable water', 'Cloud water']:
+            grib_params.append((param, [('entireAtmosphere', 0), ('unknown', 0)]))
+
+        # Pressure level parameters (9 levels each)
+        pressure_levels = [1000, 900, 800, 700, 600, 500, 400, 300, 200]
+        for param in ['Vertical velocity', 'Geopotential Height', 'Absolute vorticity',
+                      'Temperature', 'Relative humidity', 'U component of wind', 'V component of wind']:
+            for level in pressure_levels:
+                grib_params.append((param, [('isobaricInhPa', level)]))
+
+        # Expected: 2 + 7*9 = 65 parameters
+        if len(grib_params) != 65:
+            print(f"  ERROR: Expected 65 parameters, got {len(grib_params)}", flush=True)
+            return
+
+        # Extract data for each day
+        # Result shape: (nb_days * nb_cells, 195) = (nb_days * nb_cells, 65 * 3)
+        all_data = []
+        skipped = 0
+
+        for day_date in tqdm.tqdm(self.meteo_days, desc="  Extracting weather"):
+            # For each cell, collect data from all 3 hours
+            for cell_lat, cell_lon in self.cells_latlon:
+                day_values = []
+
+                for hour in [6, 12, 18]:
+                    # Construct GRIB filename
+                    grb_path = os.path.join(
+                        self.gfs_dir,
+                        day_date.strftime('%Y-%m'),
+                        f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
+                    )
+
+                    if not os.path.exists(grb_path):
+                        skipped += 1
+                        # Fill with zeros for missing data
+                        day_values.extend([0.0] * len(grib_params))
+                        continue
+
+                    try:
+                        grb_reader = GribReader(grb_path)
+
+                        # Get values for this cell
+                        values = grb_reader.getValues(grib_params, [(cell_lat, cell_lon)])
+
+                        if values is None or len(values) != len(grib_params):
+                            day_values.extend([0.0] * len(grib_params))
+                        else:
+                            day_values.extend(values)
+
+                    except Exception as e:
+                        print(f"  ERROR reading {grb_path}: {e}", flush=True)
+                        day_values.extend([0.0] * len(grib_params))
+                        skipped += 1
+
+                # day_values should have 65 * 3 = 195 values
+                if len(day_values) != 195:
+                    print(f"  WARNING: Expected 195 values, got {len(day_values)} for {day_date} cell ({cell_lat}, {cell_lon})", flush=True)
+                    day_values = day_values[:195] + [0.0] * (195 - len(day_values))
+
+                all_data.append(day_values)
+
+        if skipped > 0:
+            print(f"  WARNING: Skipped {skipped} GRIB files (missing or error)", flush=True)
+
+        # Convert to numpy array
+        meteo_content = np.array(all_data, dtype=np.float32)
+
+        print(f"  Matrix shape: {meteo_content.shape}", flush=True)
+        expected_shape = (self.nb_days * self.nb_cells, 195)
+        print(f"  Expected shape: {expected_shape} (days×cells, params×3hours)", flush=True)
+
+        self.save_pkl("meteo_content_by_cell_day", meteo_content)
 
     def build_flights_by_cell_day(self, source: str = "skygr") -> None:
         """
@@ -580,20 +748,34 @@ def parse_bbox(bbox_str: str) -> Tuple[float, float, float, float]:
 
 def main() -> int:
     """Main entry point."""
+    # Load .env file for defaults (optional)
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass  # .env support is optional
+
+    # Get project root from env or default
+    project_root = Path(os.environ.get("PROJECT_ROOT", Path(__file__).parent.parent))
+
     parser = argparse.ArgumentParser(
         description="Build PKL dataset for neural network training"
     )
     parser.add_argument("--db-url",
                        default=os.environ.get("IGC_DB_URL", "postgresql://paraglidable:paraglidable@localhost:5432/paraglidable"),
-                       help="PostgreSQL connection URL (default: from IGC_DB_URL env or localhost)")
-    parser.add_argument("--bbox", required=True,
-                       help="Bounding box: lat_min,lat_max,lon_min,lon_max (e.g., '43,49,4,37')")
-    parser.add_argument("--gfs-dir", default="data/gfs/anl",
-                       help="Path to GFS GRIB files directory")
-    parser.add_argument("--elevation-dir", default="../tiler/_cache/elevation",
-                       help="Path to elevation tiles directory")
-    parser.add_argument("--out-dir", default="../neural_network/bin/data",
-                       help="Output directory for PKL files")
+                       help="PostgreSQL connection URL (default: from IGC_DB_URL env)")
+    parser.add_argument("--bbox",
+                       default=os.environ.get("TRAINING_BBOX"),
+                       help="Bounding box: lat_min,lat_max,lon_min,lon_max (default: from TRAINING_BBOX env)")
+    parser.add_argument("--gfs-dir",
+                       default=str(project_root / os.environ.get("GFS_DIR", "data/gfs/anl")),
+                       help="Path to GFS GRIB files directory (default: from GFS_DIR env)")
+    parser.add_argument("--elevation-dir",
+                       default=str(project_root / os.environ.get("ELEVATION_DIR", "tiler/_cache/elevation")),
+                       help="Path to elevation tiles directory (default: from ELEVATION_DIR env)")
+    parser.add_argument("--out-dir",
+                       default=str(project_root / os.environ.get("PKL_DIR", "neural_network/bin/data")),
+                       help="Output directory for PKL files (default: from PKL_DIR env)")
     parser.add_argument("--source", default="skygr",
                        help="Flight source to use")
     parser.add_argument("--skip-meteo", action="store_true",
@@ -602,6 +784,11 @@ def main() -> int:
                        help="Skip flights processing")
 
     args = parser.parse_args()
+
+    # Check if bbox is provided
+    if not args.bbox:
+        print("ERROR: --bbox is required or set TRAINING_BBOX in .env file", file=sys.stderr)
+        return 1
 
     # Parse bbox
     try:
@@ -644,7 +831,8 @@ def main() -> int:
 
         # Step 2: Scan meteo data
         if not args.skip_meteo:
-            builder.build_meteo_days()
+            training_dates = os.environ.get("TRAINING_DATES")
+            builder.build_meteo_days(training_dates)
 
             # Step 3: Extract meteo content
             builder.build_meteo_content()
