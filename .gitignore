@@ -19,3 +19,9 @@ CLAUDE.md
 .vscode/*
 paraglidable.session.sql
 .env
+neural_network/bin/models/CLASSIFICATION_2.0.0/*
+neural_network/tmp_*
+scripts/neural_network
+scripts/data
+data/flights/*.json
+data/flights/merged

@@ -368,11 +368,32 @@ def download_gfs_hour(day, hour, data_directory, stats, max_retries=3, filter_af
     return False
 
 
+def validate_date(date_str):
+    """Parse YYYY-MM-DD date, allowing day 31 to be treated as last day of month."""
+    try:
+        return datetime.datetime.strptime(date_str, '%Y-%m-%d').date()
+    except ValueError:
+        # Check if it's a "day out of range" error for day 31
+        if date_str.endswith('-31'):
+            # Try parsing with day 30, then 29, then 28
+            for d in [30, 29, 28]:
+                try:
+                    alt_date = date_str[:-2] + str(d)
+                    return datetime.datetime.strptime(alt_date, '%Y-%m-%d').date()
+                except ValueError:
+                    continue
+        raise
+
+
 def download_weather_data(args):
     """Main download function with support for parallel workers."""
     # Parse dates
-    start = datetime.datetime.strptime(args.start_date, '%Y-%m-%d').date()
-    end = datetime.datetime.strptime(args.end_date, '%Y-%m-%d').date()
+    try:
+        start = validate_date(args.start_date)
+        end = validate_date(args.end_date)
+    except ValueError as e:
+        print(f"Error: Invalid date format or value: {e}")
+        return 1
 
     # Parse hours
     hours = [int(h.strip()) for h in args.hours.split(',')]

@@ -180,9 +180,9 @@ class get_wind_block_spots(tf.keras.layers.Layer):
 
 	def build(self, input_shape): # input_shape: (?, 5, 3, 8)
 
-		nb_altitudes = input_shape[1]
-		nb_hours     = input_shape[2]
-		wind_dim     = input_shape[3]
+		nb_altitudes = int(input_shape[1])
+		nb_hours     = int(input_shape[2])
+		wind_dim     = int(input_shape[3])
 
 		# specific variable
 		self.windWeights = self.add_weight(name        = 'windWeights',
@@ -202,9 +202,9 @@ class get_wind_block_spots(tf.keras.layers.Layer):
 
 	def call(self, x): # x (?, nbAltitudes, nbHours, nbWindDirections)
 
-		nb_altitudes = x.shape[1]
-		nb_hours     = x.shape[2]
-		wind_dim     = x.shape[3]
+		nb_altitudes = int(x.shape[1])
+		nb_hours     = int(x.shape[2])
+		wind_dim     = int(x.shape[3])
 
 		x_permuted = tf.keras.backend.permute_dimensions(x, [0, 2, 1, 3]) # (?, nbHours, nbAltitudes, nbWindDirections)
 		x_reshaped = tf.keras.backend.reshape(x_permuted, (-1, wind_dim)) # (?, nbAltitudes, nbWindDirections)
@@ -300,7 +300,7 @@ class get_population_block(tf.keras.layers.Layer):
 
 		# specific variable
 		self.popu = self.add_weight( name        = 'kernel',
-                                     shape       = (shape_prediction[-2]*self.super_resolution*self.super_resolution, shape_prediction[-1]), # (nbCells*super_resolution^2, nbAltitudes)
+                                     shape       = (int(shape_prediction[-2])*self.super_resolution*self.super_resolution, int(shape_prediction[-1])), # (nbCells*super_resolution^2, nbAltitudes)
                                      trainable   = True,
                                      initializer = tf.keras.initializers.Constant(value=0.5),
 		                             constraint  = tf.keras.constraints.NonNeg())
@@ -326,11 +326,11 @@ class get_population_block(tf.keras.layers.Layer):
 		dow_factor7 = self.var_dow_factor
 
 		prediction        = tf.keras.backend.repeat_elements(prediction, self.super_resolution*self.super_resolution, 1) # (?, nbCells*super_resolution^2, nbAltitudes)
-		popu_reshaped     = tf.keras.backend.reshape(self.popu, (1, self.popu.shape[0], self.popu.shape[1])) # (1, nbCells*super_resolution^2, nbAltitudes)
+		popu_reshaped     = tf.keras.backend.reshape(self.popu, (1, int(self.popu.shape[0]), int(self.popu.shape[1]))) # (1, nbCells*super_resolution^2, nbAltitudes)
 		tiled_popu        = tf.keras.backend.tile(popu_reshaped, (tf.keras.backend.shape(prediction)[0], 1, 1)) # (?, nbCells*super_resolution^2, nbAltitudes)
 		day_factor_vector = (1.0 + self.var_date_factor * date) * tf.keras.backend.batch_dot(dow, dow_factor7, axes=1) # (?, 1)
 		day_factor_vector = tf.keras.backend.reshape(day_factor_vector, (tf.keras.backend.shape(day_factor_vector)[0], 1, 1))         # (?, 1, 1)
-		day_factor_vector = tf.keras.backend.tile(day_factor_vector, (1, tiled_popu.shape[1], tiled_popu.shape[2]))    # (?, nbCells*super_resolution^2, nbAlts)
+		day_factor_vector = tf.keras.backend.tile(day_factor_vector, (1, int(tiled_popu.shape[1]), int(tiled_popu.shape[2])))    # (?, nbCells*super_resolution^2, nbAlts)
 		tiled_popu = day_factor_vector * tiled_popu
 
 		if self.problem_formulation == ProblemFormulation.CLASSIFICATION:

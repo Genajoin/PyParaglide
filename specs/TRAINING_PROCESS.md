@@ -4,17 +4,95 @@
 
 Документ описывает процесс обучения нейронной сети для прогнозирования условий полёта на планёре.
 
+## Рабочий подход подготовки данных
+
+**Текущий рабочий метод (2025):**
+1. **Данные полётов** → xContest JSON файлы в `data/flights/`
+2. **Метео-данные** → AWS S3 через `scripts/download_GFS.py` (2021+)
+
+**Рекомендуемая среда:** Docker Compose (автоматически настраивает volumes, shm_size, монтирование)
+
+---
+
+## Docker Quick Start
+
+### 1. Настройка `.env`
+
+```bash
+# Область обучения (bbox) - задаёт количество ячеек
+# Формат: lat_min,lat_max,lon_min,lon_max
+TRAINING_BBOX=45,47,13,15  # 9 ячеек: Slovenia/northern Italy
+
+# Период обучения (летние месяцы 2021-2025)
+# Формат: YYYY-MM-DD:YYYY-MM-DD,YYYY-MM-DD:YYYY-MM-DD,...
+TRAINING_DATES=2021-06-01:2021-08-31,2022-06-01:2022-08-31,2023-06-01:2023-08-31,2024-06-01:2024-08-31,2025-06-01:2025-08-31
+
+# Минимум полётов на spot для SPOTS модели
+MIN_FLIGHTS_PER_SPOT=200
+```
+
+### 2. Docker Compose настройка
+
+**Важно:** `docker-compose.yml` должен содержать `shm_size: 10gb` для multiprocessing:
+
+```yaml
+services:
+  paraglidable:
+    shm_size: 10gb  # Обязательно для build_pkl_dataset.py
+    volumes:
+      - .:/workspaces/Paraglidable
+      - /mnt/backup/Paraglidable:/mnt/backup/Paraglidable  # Если данные на другом диске
+```
+
+### 3. Запуск контейнера
+
+```bash
+# Первый запуск или после изменений docker-compose.yml
+docker compose up -d
+
+# Вход в контейнер
+docker exec -it paraglidable bash
+```
+
+### 4. Полный pipeline обучения (внутри Docker)
+
+```bash
+# === Шаг 1: Сборка метаданных и метеоданных ===
+python3 /workspaces/Paraglidable/scripts/build_pkl_dataset.py
+
+# === Шаг 2: Восстановление meteo_days.pkl (если нужно) ===
+python3 /workspaces/Paraglidable/scripts/update_meteo_days.py --rebuild
+
+# === Шаг 3: Извлечение данных из xContest ===
+python3 /workspaces/Paraglidable/scripts/extract_training_data.py
+
+# === Шаг 4: Генерация PKL из xContest данных ===
+python3 /workspaces/Paraglidable/scripts/build_pkl_from_xcontest.py
+
+# === Шаг 5: Обучение ===
+cd /workspaces/Paraglidable/neural_network
+python train.py
+```
+
+---
+
+## Архитектура обучения
+
+**Альтернативные методы (не работают / не протестированы):**
+- ⚠️ **IGC scraping** — DEPRECATED, не работает
+- ❓ **UCAR RDA** — не протестирован (требует регистрацию)
+
 ## Архитектура обучения
 
 ### Две модели:
 
 1. **CELLS Model** - Прогноз пригодности для каждой 1°x1° ячейки
    - Использует **динамически определённое количество ячеек** (из `sorted_cells_latlon.pkl`)
-   - По умолчанию: 55 ячеек для полного датасета
+   - Количество ячеек задаётся через `TRAINING_BBOX` в `.env`
    - Предсказывает: flyability, crossability, wind-flyability, humidity-flyability
 
 2. **SPOTS Model** - Прогноз для конкретных точек взлёта
-   - Использует **все доступные ячейки** из датасета
+   - Использует все доступные ячейки из датасета
    - Предсказывает flyability для каждого spot
 
 ### Входные данные (метеорология):
@@ -35,31 +113,22 @@
 
 ### Целевые данные (полёты):
 
-**Источник:** XC-Leonardo и другие трекинговые системы
-**Формат:** IGC файлы (стандарт FAI)
-
-**Структура IGC файла:**
-```
-HFDTE260425       - Дата (YYMMDD)
-HFPLTPilot:Name   - Пилот
-HFGTYGlider:Type  - Тип планёра
-HFFXA100          - Версия формата
-...
-B121535453023N00002539WA0045003098  - Трек (время, lat, lon, alt, ...)
-...
-```
+**Источник:** xContest API через JSON
+- **Формат:** JSON файлы с данными о полётах
+- **Расширение:** `extensions/xcontest_data_collector/`
 
 **Ключевые извлекаемые данные:**
-1. Дата полёта (из `HFDTE`)
-2. Координаты взлёта (первые B-строки)
-3. Трек полёта (последовательность B-строк)
-4. Балл/очки (постобработка XC-Leonardo)
+1. Дата и время полёта
+2. Координаты взлёта (lat, lon)
+3. Высота точки взлёта
+4. Балл/очки (score)
+5. Информация о пилоте и планёре
 
 ### Агрегация данных:
 
 **Ячейки:** 1° × 1° (lat × lon)
 ```python
-cell_lat = int(takeoff_lat)  # 例如: 45 для lat=45.7°N
+cell_lat = int(takeoff_lat)  # например: 45 для lat=45.7°N
 cell_lon = int(takeoff_lon)  # например: 12 для lon=12.3°E
 ```
 
@@ -76,257 +145,285 @@ flights_by_cell_day[cell_index, day_index] = [
 
 ### Файлы в `neural_network/bin/data/`:
 
-| Файл | Размер | Описание |
-|------|--------|----------|
-| `sorted_cells_latlon.pkl` | 97 | Координаты ячеек (lat, lon) |
-| `sorted_cells.pkl` | 97 | Индексы в GRIB сетке |
-| `flights_by_cell_day.pkl` | ~ | Полёты по ячейкам/дням |
-| `flights_by_cell_day_spot.pkl` | ~ | Полёты по ячейкам/дням/spot |
-| `meteo_days.pkl` | ~ | Дни с погодными данными |
-| `meteo_params.pkl` | 195 | Описание параметров |
-| `meteo_content_by_cell_day.pkl` | ~ | Матрица погодных данных |
-| `mountainess_by_cell_alt.pkl` | 97 | Высота рельефа по ячейкам |
-| `spots.pkl` | ~ | Точки взлёта |
-| `spots_merged.pkl` | ~ | Объединённые spots |
-| `flights_by_spot.pkl` | ~ | Полёты по spots |
-| `spots_by_cell.pkl` | ~ | Spots по ячейкам |
+| Файл | Описание |
+|------|----------|
+| `sorted_cells_latlon.pkl` | Координаты ячеек (lat, lon) — задаётся через `TRAINING_BBOX` |
+| `sorted_cells.pkl` | Индексы в GRIB сетке |
+| `meteo_days.pkl` | Дни с погодными данными — фильтруется по `TRAINING_DATES` |
+| `meteo_params.pkl` | Описание параметров (195 штук) |
+| `meteo_content_by_cell_day.pkl` | Матрица погодных данных `[nb_days*nb_cells, 195]` |
+| `mountainess_by_cell_alt.pkl` | Гористость по ячейкам `[nb_cells, 5]` |
+| `flights_by_cell_day.pkl` | Полёты по ячейкам/дням (из PostgreSQL, опционально) |
 
-### Текущие обучающие ячейки (97 штук):
+### Настройка области обучения (`.env`)
 
-**Диапазон:**
-- Latitude: 43°N - 49°N
-- Longitude: 4°E - 18°E
+```bash
+# Область обучения (bbox)
+TRAINING_BBOX=45,47,13,15  # 4 ячейки: Slovenia/Julian Alps
 
-**Примеры координат:**
-```
-Cell 0:  lat=46.0°N, lon=12.0°E  (центральные Альпы)
-Cell 54: lat=45.0°N, lon=9.0°E   (северная Италия)
+# Период обучения (летние месяцы 2021-2025)
+TRAINING_DATES=2021-06-01:2021-08-31,2022-06-01:2022-08-31,2023-06-01:2023-08-31,2024-06-01:2024-08-31,2025-06-01:2025-08-31
 ```
 
 ---
 
-## Процесс обучения
+## Подготовка данных (детальный pipeline)
 
-### Этап 1: Подготовка данных
+### Шаг 0: Сбор исходных данных (один раз)
 
-1. **Сбор полётов:**
-   - Скачать IGC файлы с XC-Leonardo для каждой ячейки
-   - Период: обычно несколько лет (2018-2024)
-   - Скрипт: (нужен для скачивания с XC-Leonardo API)
+#### 0.1 Сбор данных полётов (xContest)
 
-2. **Сбор погодных данных:**
-   - Скачать исторические GFS GRIB файлы
-   - Период: совпадает с полётами
-   - Разрешение: 0.25°
+**Расширение:** `extensions/xcontest_data_collector/`
 
-3. **Агрегация:**
-   - Сопоставить полёты с погодными условиями
-   - Создать `flights_by_cell_day.pkl`
-   - Создать `meteo_content_by_cell_day.pkl`
+Собирает JSON файлы с данными о полётах через браузерное расширение xContest.
 
----
+Результат: файлы в `data/flights/`:
+- `xcontest_flights_YYYY-MM-DD-sl-XX.json` (Slovenia)
+- `xcontest_flights_YYYY-MM-DD-ru-XX.json` (Russia)
 
-## Скачивание GFS данных
-
-### Обзор источников
-
-| Источник | Период | Доступ | Размер файла | Регион |
-|----------|--------|--------|--------------|--------|
-| **AWS S3** | 2021+ | Публичный | ~300-500 MB | Весь мир |
-| **NCAR RDA** | 2000-2019+ | Регистрация | ~150 MB | Весь мир |
-| **dynamical.org** | 2015-2024 | Публичный | ~50 MB (Zarr) | Весь мир |
-| **NOMADS** | ~30 дней | Публичный | N/A | Весь мир |
-
----
-
-### Способ 1: AWS S3 (для данных 2021+)
+#### 0.2 Скачивание GFS данных
 
 **Скрипт:** `scripts/download_GFS.py`
 
-**Преимущества:**
-- Публичный доступ без регистрации
-- Высокая скорость скачивания
-- Опция `--filter` уменьшает размер на ~50%
+```bash
+python3 scripts/download_GFS.py \
+  --start-date 2021-06-01 \
+  --end-date 2025-08-31 \
+  --data-dir data/gfs/anl \
+  --hours 6,12,18 \
+  --filter
+```
 
-**Недостатки:**
-- Только с 2021 года
-- Скачивает весь мир (большие файлы)
+Результат: GRIB файлы в `data/gfs/anl/` (несколько сотен GB)
 
-**Пример использования:**
+---
+
+### Шаг 1: Генерация базовых PKL файлов
+
+**Скрипт:** `scripts/build_pkl_dataset.py`
+
+**Выполняется внутри Docker:**
+```bash
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/build_pkl_dataset.py
+```
+
+**Что делает:**
+1. Читает настройки из `.env` (`TRAINING_BBOX`, `TRAINING_DATES`)
+2. Создаёт `sorted_cells_latlon.pkl` на основе bbox
+3. Сканирует GFS файлы и создаёт `meteo_days.pkl`
+4. Извлекает погодные данные из GRIB → `meteo_content_by_cell_day.pkl`
+5. Вычисляет гористость → `mountainess_by_cell_alt.pkl`
+
+**Создаваемые файлы:**
+- `sorted_cells_latlon.pkl` — координаты ячеек
+- `sorted_cells.pkl` — индексы в GRIB сетке
+- `meteo_days.pkl` — список дней с данными
+- `meteo_params.pkl` — описание 195 параметров
+- `meteo_content_by_cell_day.pkl` — матрица погодных данных
+- `mountainess_by_cell_alt.pkl` — гористость по ячейкам
+
+**Важно:** По умолчанию пропускает данные полётов (`--include-flights` не указан).
+
+---
+
+### Шаг 2: Восстановление meteo_days.pkl (при необходимости)
+
+**Скрипт:** `scripts/update_meteo_days.py`
 
 ```bash
-# Скачивание с фильтрацией по параметрам
-docker exec paraglidable python3 /workspaces/Paraglidable/scripts/download_GFS.py \
-    --start-date 2025-06-01 \
-    --end-date 2025-08-31 \
-    --data-dir data/gfs/anl \
-    --hours 6,12,18 \
-    --filter
+# Пересоздать с нуля на основе файлов на диске
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/update_meteo_days.py --rebuild
 ```
 
-**Расчет размера:**
-- Без фильтра: ~140 GB за 3 месяца
-- С фильтром `--filter`: ~70 GB за 3 месяца
+**Когда нужно:**
+- После изменения `TRAINING_DATES` в `.env`
+- Если `meteo_days.pkl` был случайно очищен
 
 ---
 
-### Способ 2: NCAR RDA (для исторических данных 2000-2019+)
+### Шаг 3: Извлечение данных из xContest
 
-**Скрипт:** `scripts/download_GFS_rda.py`
-
-**Преимущества:**
-- Исторические данные с 2000 года
-- Полный набор параметров на изобарических уровнях
-- Совместим с GribReader
-
-**Недостатки:**
-- Требуется регистрация на https://rda.ucar.edu/login/
-- Скачивает весь мир
-
-**Настройка:**
-
-1. Регистрация на RDA UCAR:
-   ```
-   https://rda.ucar.edu/login/
-   ```
-
-2. Создать `.env` файл в корне проекта:
-   ```bash
-   UCAR_EMAIL=your@email.com
-   UCAR_PASS=your_password
-   ```
-
-3. Установить зависимости:
-   ```bash
-   pip install httpx python-dotenv tqdm
-   ```
-
-**Пример использования:**
+**Скрипт:** `scripts/extract_training_data.py`
 
 ```bash
-# Лето 2012 года (Greece/Balkans region)
-python3 scripts/download_GFS_rda.py 2012-06-01 2012-08-31 data/gfs/anl
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/extract_training_data.py
 ```
 
-**Расчет размера:**
-- ~150 MB за файл
-- За лето 2012 (92 дней × 3 часа): ~40 GB
+**Что делает:**
+1. Объединяет все JSON файлы из `data/flights/`
+2. Вычисляет `mountainess` для каждого полёта
+3. Фильтрует по bbox и датам из `.env`
+4. Создаёт `data/flights/merged/training_flights.json`
+
+**Выводит статистику:**
+- Всего полётов
+- Полётов с score (очки XC)
+- Полётов вне области ячеек
+- Полётов вне диапазона дат
 
 ---
 
-### Способ 3: dynamical.org (Zarr формат, экспериментальный)
+### Шаг 4: Генерация PKL из xContest данных
 
-**URL:** https://data.dynamical.org/noaa/gfs/analysis-hourly/latest.zarr
+**Скрипт:** `scripts/build_pkl_from_xcontest.py`
 
-**Преимущества:**
-- Cloud-optimized Zarr формат
-- Можно читать только нужный регион
-- 2015-2024 период
+```bash
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/build_pkl_from_xcontest.py
+```
 
-**Недостатки:**
-- **Только surface переменные** (temperature_2m, wind_10m)
-- **Нет данных на изобарических уровнях** (1000, 900, 800, 700, 600, 500, 400, 300, 200 hPa)
-- Не подходит для обучения нейросети
+**Что делает:**
+1. Читает `data/flights/merged/training_flights.json`
+2. Создаёт SPOTS-специфичные PKL файлы
 
-**Вывод:** Не подходит для текущей модели, так как отсутствуют данные на уровнях давления.
+**Создаваемые файлы:**
+- `spots.pkl` — список точек взлёта
+- `spots_by_cell.pkl` — распределение spots по ячейкам
+- `flights_by_spot.pkl` — полёты по точкам взлёта
+- `flights_by_cell_day_spot.pkl` — полёты по (ячейка, день, spot)
 
 ---
 
-### Рекомендации по выбору источника
+### Шаг 5: Обучение моделей
 
-| Задача | Рекомендуемый источник |
-|--------|----------------------|
-| Обучение на свежих данных (2021+) | AWS S3 (`download_GFS.py`) |
-| Обучение на исторических данных (2012-2019) | NCAR RDA (`download_GFS_rda.py`) |
-| Тестовое обучение (1 месяц) | AWS S3 или NCAR RDA |
+**Скрипт:** `neural_network/train.py`
 
----
-
-### Структура выходных файлов
-
-Файлы сохраняются в формате совместимом с `GribReader`:
-
-```
-data/gfs/anl/
-├── 2012-06/
-│   ├── gfsanl_3_20120601_0600_000.grb2
-│   ├── gfsanl_3_20120601_1200_000.grb2
-│   └── ...
-├── 2012-07/
-└── 2012-08/
-```
-
-### Этап 2: Обучение Population Model
-
-**Файл:** `neural_network/train.py`
-
-**Динамическое определение количества ячеек:**
-
-```python
-# Train класс автоматически определяет количество ячеек из данных
-from inc.dataset import DatasetParams
-dataset_params = DatasetParams()
-nb_cells = dataset_params.nb_cells  # Читает из sorted_cells.pkl
-
-train = Train(model_dir, ModelType.CELLS, ProblemFormulation.CLASSIFICATION)
-# self.all_cells автоматически заполняется: [0, 1, 2, ..., nb_cells-1]
+```bash
+docker exec paraglidable bash -c "cd /workspaces/Paraglidable/neural_network && python train.py"
 ```
 
 **Процесс:**
-1. Для каждой ячейки:
-   - Загрузить погодные данные для дней с полётами
-   - Загрузить данные о полётах
-   - Обучить модель предсказывать вероятность полёта
+1. Обучает CELLS модель (по ячейкам)
+2. Обучает SPOTS модель (по точкам взлёта)
+3. Сохраняет веса в `neural_network/bin/models/CLASSIFICATION_2.0.0/weights/`
 
-2. Создаётся `population_alt_cell_XX.npy` для каждой ячейки:
-   - Содержит 5 значений (по одному на высоту)
-   - Хранится в `bin/models/CLASSIFICATION_1.0.0/weights/`
+**Ожидаемое время:**
+- 1 ячейка: ~10 минут
+- 9 ячеек: ~1-2 часа (CPU)
 
-**Population weights** (`population_alt_cell_XX.npy`):
-- Размер: (5,) - одно значение на высоту
-- Смысл: "базовая вероятность полёта" для данной ячейки
-- Обучается на данных о том, летали ли в этот день
+---
 
-### Этап 3: Обучение Spots Model
+## Обучающие данные
 
-**Динамическое определение:**
+### Файлы в `neural_network/bin/data/`:
 
-```python
-# Использует все доступные ячейки из датасета
-from inc.dataset import DatasetParams
-dataset_params = DatasetParams()
-nb_cells = dataset_params.nb_cells
+| Файл | Создаётся шагом | Описание |
+|------|-----------------|----------|
+| `sorted_cells_latlon.pkl` | 1 | Координаты ячеек (lat, lon) — из `TRAINING_BBOX` |
+| `sorted_cells.pkl` | 1 | Индексы в GRIB сетке |
+| `meteo_days.pkl` | 1,2 | Дни с погодными данными — фильтруется по `TRAINING_DATES` |
+| `meteo_params.pkl` | 1 | Описание 195 параметров погоды |
+| `meteo_content_by_cell_day.pkl` | 1 | Матрица `[nb_days*nb_cells, 195]` |
+| `mountainess_by_cell_alt.pkl` | 1 | Гористость `[nb_cells, 5]` |
+| `spots.pkl` | 4 | Список точек взлёта (для SPOTS модели) |
+| `spots_by_cell.pkl` | 4 | Распределение spots по ячейкам |
+| `flights_by_spot.pkl` | 4 | Полёты по точкам взлёта |
+| `flights_by_cell_day_spot.pkl` | 4 | Полёты по (ячейка, день, spot) |
 
-# Процесс:
-# 1. Для каждого spot в ячейке (c in range(nb_cells)):
-#    - Обучить модель предсказывать flyability
-#    - Учесть специфику spot (экспозиция, рельеф и т.д.)
+---
+
+## Troubleshooting
+
+### Ошибка: "No space left on device"
+
+**Проблема:** `/dev/shm` переполнен при multiprocess-обработке GRIB.
+
+**Решение:**
+```bash
+# 1. Остановить контейнер
+docker compose down
+
+# 2. Добавить в docker-compose.yml:
+#    shm_size: 10gb
+
+# 3. Перезапустить
+docker compose up -d
 ```
 
-### Тестирование на малых датасетах
+### Ошибка: "ValueError: ... is not in list" при обучении
 
-**Файл:** `neural_network/test_with_small_dataset.py`
+**Проблема:** `meteo_params.pkl` пустой или несовместим.
 
-Для тестирования pipeline на малых датасетах (например, 6 ячеек):
-
-```python
-from inc.bin_obj import BinObj
-BinObj.obj_path = "./bin/data_test"  # Малый датасет
-
-from train import Train
-from inc.model import ModelType, ProblemFormulation
-
-# Train автоматически определяет nb_cells из data_test
-train = Train("./bin/models/TEST", ModelType.CELLS, ProblemFormulation.CLASSIFICATION)
-train.set_trained([3, 4], super_resolution=1, load_weights=False)
-train.train((0.01, 0.001, 5), use_validation_set=False)
-train.save()
+**Решение:** Пересобрать метеданные:
+```bash
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/build_pkl_dataset.py
 ```
 
-**Преимущества:**
-- Не требуется monkey patching или изменение кода
-- Работает с любым размером датасета
-- Автоматически адаптируется к данным
+### Мало спотов для обучения
+
+**Проверьте:**
+```bash
+# Статистика по ячейкам
+docker exec paraglidable bash -c "cat /workspaces/Paraglidable/data/flights/merged/stats.json"
+
+# Проверить spots
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/build_pkl_from_xcontest.py
+```
+
+**Решения:**
+- Увеличить `TRAINING_BBOX` для большего покрытия
+- Уменьшить `MIN_FLIGHTS_PER_SPOT` в `.env`
+- Собрать больше данных полётов
+
+### Плохой loss (>0.8)
+
+**Причины:**
+1. Мало обучающих данных (<1000 полётов)
+2. Слишком узкая область (меньше 4 ячеек)
+3. Данные не覆盖ют разные погодные условия
+
+**Решения:**
+- Увеличить период `TRAINING_DATES`
+- Расширить `TRAINING_BBOX`
+- Проверить качество данных (полноту score)
+
+---
+
+## Полезные команды
+
+```bash
+# === Проверка данных ===
+# Размеры ячеек и период
+docker exec paraglidable python3 -c "
+import pickle
+cells = pickle.load(open('/workspaces/Paraglidable/neural_network/bin/data/sorted_cells_latlon.pkl', 'rb'))
+days = pickle.load(open('/workspaces/Paraglidable/neural_network/bin/data/meteo_days.pkl', 'rb'))
+print(f'Ячеек: {len(cells)}')
+print(f'Период: {days[0]} - {days[-1]}')
+print(f'Дней: {len(days)}')
+"
+
+# Статистика по flights
+docker exec paraglidable bash -c "cat /workspaces/Paraglidable/data/flights/merged/stats.json"
+
+# === Пересборка данных ===
+# Только метеданные (без flights)
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/build_pkl_dataset.py
+
+# Обновление meteo_days
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/update_meteo_days.py --rebuild
+
+# Пересборка flights из xContest
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/extract_training_data.py
+docker exec paraglidable python3 /workspaces/Paraglidable/scripts/build_pkl_from_xcontest.py
+
+# === Обучение ===
+# Полное обучение
+docker exec paraglidable bash -c "cd /workspaces/Paraglidable/neural_network && python train.py"
+
+# === Диагностика ===
+# Проверить spots по ячейкам
+docker exec paraglidable bash -c "cd /workspaces/Paraglidable/neural_network && python3 -c '
+from inc.dataset import SpotsData
+s = SpotsData()
+for i in range(9):
+    spots = s.getSpots([i])
+    if spots and spots[0]:
+        print(f\"Cell {i}: {len(spots[0])} spots\")
+'"
+
+# Проверить /dev/shm
+docker exec paraglidable df -h /dev/shm
+```
 
 ---
 
@@ -334,11 +431,11 @@ train.save()
 
 ### meteo_content_by_cell_day.pkl
 
-**Размерность:** `[nb_days, nb_cells, nb_parameters]`
+**Размерность:** `[nb_days * nb_cells, 195]`
 
-- `nb_days`: ~2000+ дней
-- `nb_cells`: 97 ячеек
-- `nb_parameters`: 195 погодных параметров
+- `nb_days`: дней из `TRAINING_DATES`
+- `nb_cells`: ячеек из `TRAINING_BBOX`
+- `nb_parameters`: 195 погодных параметров (65 × 3 часа)
 
 **Структура параметров (195 = 65 × 3):**
 ```
@@ -359,184 +456,154 @@ train.save()
 ]
 ```
 
-### flights_by_cell_day.pkl
+### mountainess (гористость)
 
-**Структура:**
+**Вычисление:** `scripts/elevation_reader.py`
+
 ```python
-{
-  (cell_index, day_index): [
-    Flight(flight_id, takeoff_lat, takeoff_lon, distance, score, ...),
-    Flight(...),
-    ...
-  ]
-}
+def get_mountainess(lat, lon) -> float:
+    # Семплирует высоту в сетке 5×5 (радиус ~5км)
+    # Формула: (max_elev - min_elev) / 800
+    # Ограничивается [0, 1]
+```
+
+**Значения:**
+- `0.0` — равнина
+- `0.4-0.6` — холмистая местность
+- `1.0` — горы
+
+---
+
+## Скачивание GFS данных
+
+### Источники данных
+
+| Источник | Период | Статус | Примечания |
+|----------|--------|--------|------------|
+| **AWS S3** | 2021+ | ✅ Работает | Публичный, рекомендуется |
+| **NCAR RDA** | 2000-2019+ | ❓ Не протестирован | Требует регистрацию |
+| **dynamical.org** | 2015-2024 | ❓ Не протестирован | Zarr формат |
+| **NOMADS** | ~30 дней | ❓ Не протестирован | Только последние дни |
+
+### Способ 1: AWS S3 (для данных 2021+)
+
+**Скрипт:** `scripts/download_GFS.py`
+
+**Пример использования:**
+
+```bash
+# Скачивание с фильтрацией по параметрам
+python3 scripts/download_GFS.py \
+  --start-date 2025-06-01 \
+  --end-date 2025-08-31 \
+  --data-dir data/gfs/anl \
+  --hours 6,12,18 \
+  --filter
+```
+
+### Способ 2: NCAR RDA (для исторических данных 2000-2020+)
+
+**⚠️ НЕ ПРОТЕСТИРОВАНО** — требует регистрацию на https://rda.ucar.edu/
+
+**Скрипт:** `scripts/download_GFS_rda.py`
+
+**Настройка в `.env`:**
+```bash
+UCAR_EMAIL=your@email.com
+UCAR_PASS=your_password
+```
+
+**Пример использования:**
+```bash
+python3 scripts/download_GFS_rda.py 2012-06-01 2012-08-31 data/gfs/anl
 ```
 
 ---
 
-## Модель
+## Обучение
 
-### Архитектура:
+### Файл: `neural_network/train.py`
 
-**Входы:**
-- Метеорологические данные (195 параметров)
-- День недели (one-hot: 7 значений)
-- Дата (нормализованная)
-- Сезонные коэффициенты
-
-**Выходы:**
-1. **Flyability** - вероятность пригодности (0-1)
-2. **Crossability** - вероятность перехода (0-1)
-3. **Wind-flyability** - пригодность по ветру (0-1)
-4. **Humidity-flyability** - пригодность по влажности (0-1)
-
-Для каждой высоты: 1000, 900, 800, 700, 600 hPa
-
-### Per-cell веса:
-
-**`population_alt_cell_XX.npy`** - (5,) массив
-- Индекс 0: вес для 1000 hPa
-- Индекс 1: вес для 900 hPa
-- Индекс 2: вес для 800 hPa
-- Индекс 3: вес для 700 hPa
-- Индекс 4: вес для 600 hPa
-
-**Смысл:** Эти веса моделируют "плотность пилотов" на каждой высоте в данной ячейке. Если в ячейке много полётов на 1000 hPa, вес будет выше.
-
----
-
-## Расширение области (до 37°E)
-
-### Новые ячейки для добавления:
-
-**Текущая область:** 4°E - 18°E (97 ячеек)
-**Целевая область:** 4°E - 37°E
-
-**Новые ячейки (примерно 40-80 штук):**
-```
-Lat: 43°N - 49°N
-Lon: 19°E - 37°E
+```bash
+cd neural_network/
+python train.py
 ```
 
-### Что нужно для расширения:
+**Процесс:**
+1. Для каждой ячейки:
+   - Загрузить погодные данные для дней с полётами
+   - Загрузить данные о полётах
+   - Обучить модель предсказывать вероятность полёта
 
-1. **Данные о полётах:**
-   - Скачать IGC с XC-Leonardo для новой области
-   - Период: минимум 2-3 года данных
-   - Районы: Карпаты, Балканы, Крым, Кавказ
-
-2. **Погодные данные:**
-   - Исторические GFS для новых ячеек
-   - GRIB файлы за тот же период
-
-3. **Elevation данные:**
-   - Скачать SRTM tiles для новой области
-
-4. **Spots данные:**
-   - Extract takeoff spots из IGC файлов
-   - Ручная валидация для популярных точек
-
-### Скрипты для создания:
-
-**`scripts/download_flights_xc_leonardo.py`:**
-```python
-import requests
-from datetime import datetime
-
-# XC-Leonardo API (пример, нужен точный endpoint)
-BASE_URL = "https://www.xc-league.org/"
-
-def download_flights_for_cell(lat, lon, start_date, end_date):
-    """Скачать IGC файлы для ячейки 1x1 градус"""
-    params = {
-        'minlat': lat,
-        'maxlat': lat + 1,
-        'minlon': lon,
-        'maxlon': lon + 1,
-        'datefrom': start_date,
-        'dateto': end_date
-    }
-    # Реализовать запрос к API
-    pass
-
-# Пример использования:
-for lat in range(43, 50):
-    for lon in range(19, 38):
-        download_flights_for_cell(lat, lon, '2018-01-01', '2024-12-31')
-```
-
-**`scripts/generate_extended_cells.py`:**
-```python
-import pickle
-
-# Загрузить существующие
-with open('neural_network/bin/data/sorted_cells_latlon.pkl', 'rb') as f:
-    existing = pickle.load(f)
-
-# Добавить новые
-new_cells = []
-for lat in range(43, 50):
-    for lon in range(19, 38):
-        if (lat, lon) not in existing:
-            new_cells.append((lat, lon))
-
-all_cells = existing + new_cells
-
-# Сохранить
-with open('neural_network/bin/data/sorted_cells_latlon.pkl', 'wb') as f:
-    pickle.dump(all_cells, f)
-```
-
----
-
-## Время обучения
-
-**Текущее:**
-- Population model (55 ячеек): ~2-4 часа
-- Spots model (80 ячеек): ~4-8 часов
-
-**С расширением (140+ ячеек):**
-- Population model (120 ячеек): ~6-12 часов
-- Spots model (180 ячеек): ~10-20 часов
-
----
-
-## Проверка качества
-
-После обучения:
-
-1. **Validation loss** - должна уменьшаться
-2. **Test forecast** - запустить `python forecast.py`
-3. **Visual check** - открыть сайт и проверить карту
-4. **Spot prediction** - сравнить с реальными полётами
+2. Создаётся `population_alt_cell_XX.npy` для каждой ячейки:
+   - Содержит 5 значений (по одному на высоту)
+   - Хранится в `bin/models/CLASSIFICATION_1.0.0/weights/`
 
 ---
 
 ## Полезные команды
 
 ```bash
-# Запуск обучения (полный датасет)
+# Генерация PKL файлов
+python3 scripts/build_pkl_dataset.py --skip-flights
+
+# Извлечение данных из xContest
+python3 scripts/extract_training_data.py --cluster-distance 15
+
+# Обновление meteo_days.pkl
+python3 scripts/update_meteo_days.py
+
+# Обновление meteo_days.pkl с пересозданием
+python3 scripts/update_meteo_days.py --rebuild
+
+# Запуск обучения
 cd neural_network/
 python train.py
-
-# Тестирование на малом датасете
-python test_with_small_dataset.py
 
 # Генерация прогноза
 python forecast.py
 
-# Проверка ячеек и их количества
+# Проверка ячеек и периодов
 python3 -c "
-from inc.bin_obj import BinObj
-from inc.dataset import DatasetParams
-params = DatasetParams()
-print(f'nb_cells: {params.nb_cells}')
-print(f'nb_days: {params.nb_days}')
+import pickle
+cells = pickle.load(open('neural_network/bin/data/sorted_cells_latlon.pkl', 'rb'))
+days = pickle.load(open('neural_network/bin/data/meteo_days.pkl', 'rb'))
+print(f'Ячеек: {len(cells)}')
+print(f'Период: {days[0]} - {days[-1]}')
+print(f'Дней: {len(days)}')
 "
-
-# Проверка ячеек в PKL файле
-python3 -c "import pickle; cells=pickle.load(open('neural_network/bin/data/sorted_cells_latlon.pkl','rb')); print(len(cells), cells[:5])"
-
-# Проверка population weights
-ls neural_network/bin/models/CLASSIFICATION_1.0.0/weights/population_alt_cell_*.npy | wc -l
 ```
+
+---
+
+## IGC scraping (DEPRECATED)
+
+⚠️ **НЕ ИСПОЛЬЗУЕТСЯ** — метод парсинга IGC файлов больше не поддерживается.
+
+**Причины:**
+- Требует scraping множества сайтов
+- Нестабильные API
+- Сложно поддерживать
+
+Используйте **xContest API** вместо этого.
+
+---
+
+## Обновление метаданных
+
+### Скрипт: `scripts/update_meteo_days.py`
+
+**Назначение:** Обновляет `meteo_days.pkl` при добавлении новых GFS файлов
+
+```bash
+# Добавить новые дни (слияние с существующими)
+python3 scripts/update_meteo_days.py
+
+# Пересоздать с нуля (удалить несуществующие на диске)
+python3 scripts/update_meteo_days.py --rebuild
+```
+
+**Читает настройки из `.env`:**
+- `PROJECT_ROOT` — корень проекта
+- `GFS_DIR` — директория с GFS файлами
+- `PKL_DIR` — директория для PKL файлов

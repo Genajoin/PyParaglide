@@ -6,6 +6,7 @@
 
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Импорт TilesMaths из neural_network
 sys.path.insert(0, str(Path(__file__).parent.parent / "neural_network" / "inc"))
@@ -27,7 +28,7 @@ class ElevationReader:
         self.elevation_dir = Path(elevation_dir)
         self.zoom = zoom
 
-    def get_elevation(self, lat: float, lon: float) -> int | None:
+    def get_elevation(self, lat: float, lon: float) -> Optional[int]:
         """
         Возвращает высоту в метрах по координатам.
 

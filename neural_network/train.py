@@ -378,7 +378,7 @@ if __name__ == "__main__":
 		# Run multiple trainings
 		val_losses = []
 		for m in range(nb_trainings):
-			train.set_trained(range(55), super_resolution=1, load_weights=False)
+			train.set_trained(range(0, nb_cells), super_resolution=1, load_weights=False)
 			val_losses += [train.train(lr_schedules[0], use_validation_set=True)]
 			train.save()
 			Utils.move_dir(model_dir, cur_model_dir+str(m))
@@ -390,7 +390,7 @@ if __name__ == "__main__":
 
 		# Re-train best with all samples
 		train = Train(model_dir, ModelType.CELLS, problem_formulation)
-		train.set_trained(range(55), super_resolution=1, load_weights=True)
+		train.set_trained(range(0, nb_cells), super_resolution=1, load_weights=True)
 		train.train(lr_schedules[1], use_validation_set=False)
 
 		train.save()

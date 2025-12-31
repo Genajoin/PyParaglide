@@ -22,32 +22,58 @@ The main dependencies are:
 
 ## Installation
 
+### Docker Compose (Recommended)
+
 ```bash
 git clone https://github.com/Genajoin/Paraglidable.git
+cd Paraglidable
 
-docker build -t paraglidable2 Paraglidable/docker/
-docker run -it -v C:\PATH_TO\Paraglidable:/workspaces/Paraglidable paraglidable2
+# Configure environment (optional - edit .env for custom paths/bbox)
+cp .env.example .env
+
+# Start container
+docker compose up -d
+```
+
+**Access:**
+- Web interface: http://localhost:8001
+- Jupyter: http://localhost:8888 (after running `sh scripts/start_jupyter.sh` inside container)
+
+**One-time setup inside container:**
+```bash
+docker exec -it paraglidable bash
 
 cd /workspaces/Paraglidable/scripts/
-python download_data.py             # Download training weather and flights data (200MB)
+python download_data.py             # Download training data (200MB)
 python download_elevation_tiles.py  # Download elevation data (260MB)
-python download_background_tiles.py # Download background tiles (facultative) (180MB)
+python download_background_tiles.py # Download background tiles (optional) (180MB)
 sh build_tiler.sh                   # Build the C++ tiler
 ```
 
-You're all set!
-
 ## Usage
 
-* `/neural_network/train.py` run a new training
-* `/neural_network/forecast.py` run +10 days forecast and generate tiles
-* `/scripts/start_server.sh` start Apache server to visualize the forecast on the local website
+**Generate forecast:**
+```bash
+cd /workspaces/Paraglidable/neural_network/
+python forecast.py  # Downloads GFS, runs ML prediction, generates tiles
+```
 
-## Docummentation
+**Training:**
+```bash
+cd /workspaces/Paraglidable/neural_network/
+python train.py
+```
 
-### Neural Network
+**Start web server:**
+```bash
+sh /workspaces/Paraglidable/scripts/start_server.sh  # Visualize on localhost:8001
+```
 
-You can find the neural network description here: [neural network documentation](neural_network/)
+## Documentation
+
+- **[Deployment Guide](specs/DEPLOYMENT.md)** — Complete Docker deployment and data preparation
+- **[Training Process](specs/TRAINING_PROCESS.md)** — Neural network training workflow
+- **[Neural Network](neural_network/)** — Architecture and API documentation
 
 ## Contributing
 

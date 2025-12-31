@@ -76,7 +76,8 @@ def main():
         with open(PKL_DIR / "meteo_days.pkl", 'rb') as f:
             existing_days = pickle.load(f, encoding='latin1')
         print(f"Существующих дней в meteo_days.pkl: {len(existing_days)}")
-        print(f"  Период: {existing_days[0]} - {existing_days[-1]}")
+        if existing_days:
+            print(f"  Период: {existing_days[0]} - {existing_days[-1]}")
 
     # Сканируем GFS файлы
     scanned_days = scan_gfs_dates(GFS_DIR)

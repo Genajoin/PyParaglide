@@ -1,0 +1,56 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>IGC Batch Downloader</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <div class="container">
+      <h1>IGC Batch Downloader</h1>
+
+      <div class="stats" id="stats">
+        <span class="stat-item">Total: <strong id="total">0</strong></span>
+        <span class="stat-item">Downloaded: <strong id="downloaded" class="success">0</strong></span>
+        <span class="stat-item">Failed: <strong id="failed" class="error">0</strong></span>
+        <span class="stat-item">Pending: <strong id="pending" class="pending">0</strong></span>
+      </div>
+
+      <div class="current-status" id="currentStatus">
+        <span id="statusText">Ready</span>
+      </div>
+
+      <div class="time-elapsed">
+        Time: <strong id="timeElapsed">00:00:00</strong>
+        <span id="currentFile" class="current-file"></span>
+      </div>
+
+      <div class="controls">
+        <label>
+          Delay (ms)
+          <input id="delay" type="number" min="0" step="100" value="2000">
+        </label>
+      </div>
+
+      <div class="url-input">
+        <label for="urlList">URL List (one per line):</label>
+        <textarea id="urlList" rows="10" placeholder="https://example.com/file1.igc&#10;https://example.com/file2.igc"></textarea>
+      </div>
+
+      <div class="buttons">
+        <button id="startBtn">Start Download</button>
+        <button id="pauseResumeBtn" class="secondary" disabled>Pause</button>
+        <button id="clearBtn" class="secondary">Clear All</button>
+      </div>
+
+      <div class="hint">
+        <strong>Tip:</strong> Enable automatic downloads:<br>
+        <code>chrome://settings/downloads</code> → Disable "Ask where to save each file before downloading"
+      </div>
+
+      <div class="log" id="log"></div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

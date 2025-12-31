@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote
 
+from lib.igc_parser import parse_igc
+
 try:
     import psycopg
 except ImportError:
@@ -71,7 +73,7 @@ def extract_filename_from_url(url: str) -> Optional[str]:
 
 
 def scan_directory(base_dir: str) -> list:
-    """Scan directory for IGC files, return list of (path, filename, date, size, sha256)."""
+    """Scan directory for IGC files, return list of (path, filename, date, size, sha256, meta)."""
     files_info = []
     base_path = Path(base_dir)
 
@@ -89,7 +91,10 @@ def scan_directory(base_dir: str) -> list:
         # Compute SHA256
         sha256_hash = compute_sha256(filepath)
 
-        files_info.append((filepath, filename, flight_date, file_size, sha256_hash))
+        # Parse IGC for metadata (coordinates, pilot, glider, etc.)
+        meta = parse_igc(filepath)
+
+        files_info.append((filepath, filename, flight_date, file_size, sha256_hash, meta))
 
     return files_info
 
@@ -120,10 +125,10 @@ def main() -> int:
 
     # Build filename -> files mapping (handle duplicates)
     filename_to_files = {}
-    for filepath, filename, flight_date, file_size, sha256_hash in all_files:
+    for filepath, filename, flight_date, file_size, sha256_hash, meta in all_files:
         if filename not in filename_to_files:
             filename_to_files[filename] = []
-        filename_to_files[filename].append((filepath, flight_date, file_size, sha256_hash))
+        filename_to_files[filename].append((filepath, flight_date, file_size, sha256_hash, meta))
 
     print(f"Unique filenames: {len(filename_to_files)}")
 
@@ -159,7 +164,7 @@ def main() -> int:
             matching_files = filename_to_files[filename]
 
             if len(matching_files) == 1:
-                filepath, flight_date, file_size, sha256_hash = matching_files[0]
+                filepath, flight_date, file_size, sha256_hash, meta = matching_files[0]
                 if args.dry_run:
                     print(f"Would update: {flight_id} -> {filepath}")
                 else:
@@ -168,10 +173,25 @@ def main() -> int:
                         """
                         UPDATE flights
                         SET igc_path=%s, file_size=%s, sha256=%s, flight_date=%s,
-                            downloaded_at=%s, updated_at=%s, status='downloaded'
+                            downloaded_at=%s, updated_at=%s, status='downloaded',
+                            takeoff_lat=%s, takeoff_lon=%s, pilot=%s, glider=%s,
+                            glider_class=%s, duration_sec=%s, track_points=%s,
+                            has_baro_alt=%s, has_gps_alt=%s
                         WHERE source=%s AND flight_id=%s
                         """,
-                        (filepath, file_size, sha256_hash, flight_date, now, now, args.source, flight_id)
+                        (
+                            filepath, file_size, sha256_hash, flight_date, now, now,
+                            meta.get("takeoff_lat"),
+                            meta.get("takeoff_lon"),
+                            meta.get("pilot"),
+                            meta.get("glider"),
+                            meta.get("glider_class"),
+                            meta.get("duration_sec"),
+                            meta.get("track_points"),
+                            meta.get("has_baro_alt"),
+                            meta.get("has_gps_alt"),
+                            args.source, flight_id
+                        )
                     )
                 updated += 1
                 # Remove from dict so we don't match it again

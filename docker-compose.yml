@@ -7,9 +7,12 @@ services:
     hostname: paraglidable
     user: paraglidable
     working_dir: /workspaces/Paraglidable
+    shm_size: 10gb
     volumes:
       # Монтируем весь проект для локальной разработки
       - .:/workspaces/Paraglidable
+      # Данные GFS на другом диске (для обучения)
+      - /mnt/backup/Paraglidable:/mnt/backup/Paraglidable
       # Сохраняем только данные между перезапусками
       - neural-data:/workspaces/Paraglidable/neural_network/data
       - jupyter:/home/paraglidable/.local/share/jupyter

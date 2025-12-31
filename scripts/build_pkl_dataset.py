@@ -19,14 +19,23 @@ Flight scoring:
 """
 
 import argparse
+import gc
 import math
 import os
 import struct
 import sys
+import signal
+import time
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+import multiprocessing
+import queue as Queue
+import threading
+import uuid
+import tempfile
 
 # Add neural_network path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'neural_network'))
@@ -73,6 +82,161 @@ try:
 except ImportError:
     print("ERROR: Failed to import igc_ingest_skygr", file=sys.stderr)
     sys.exit(1)
+
+
+def _file_reader(file_queue, job_queue, gfs_dir, stop_event):
+    """
+    Reader Thread (Main Process): SEQUENTIAL HDD I/O.
+    Reads GRIB from HDD, writes copy to /dev/shm (RAM), puts PATH into job_queue.
+    """
+    temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else tempfile.gettempdir()
+    
+    while not stop_event.is_set():
+        try:
+            day_date, hour = file_queue.get(timeout=1)
+        except Queue.Empty:
+            break
+
+        if day_date is None:
+            break
+
+        grb_path = os.path.join(
+            gfs_dir,
+            day_date.strftime('%Y-%m'),
+            f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
+        )
+
+        if not os.path.exists(grb_path):
+            job_queue.put((day_date, hour, None)) # Missing file
+            continue
+
+        try:
+            # 1. Read ENTIRE file from HDD (Sequential I/O)
+            with open(grb_path, 'rb') as f:
+                data = f.read()
+            
+            # 2. Write to RAM disk (Fast I/O) for workers
+            temp_path = os.path.join(temp_dir, f"grib_{uuid.uuid4()}.grb2")
+            with open(temp_path, 'wb') as f:
+                f.write(data)
+            
+            # 3. Pass PATH to workers (avoid pickling 500MB data)
+            job_queue.put((day_date, hour, temp_path))
+            
+        except Exception as e:
+            # print(f"Read error: {e}", flush=True)
+            job_queue.put((day_date, hour, None))
+
+
+def _file_processor(job_queue, hourly_queue, grib_params, cells_latlon):
+    """
+    Worker Process (Separate CPU Core): CPU INTENSIVE.
+    Reads from RAM disk, parses GRIB, extracts values.
+    """
+    # Re-import inside process
+    from inc.grib_reader import InMemoryGribReader
+    import signal
+    
+    # Ignore SIGINT in workers, let main process handle cleanup
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+    while True:
+        try:
+            day_date, hour, temp_path = job_queue.get()
+        except Exception:
+            break
+
+        if day_date is None: # Sentinel
+            break
+
+        if temp_path is None: # Missing file
+             hourly_queue.put((day_date, hour, None))
+             continue
+
+        grb_reader = None
+        try:
+            # Parse with pygrib (CPU intensive, Parallel)
+            grb_reader = InMemoryGribReader(temp_path)
+            values = grb_reader.getValues(grib_params, cells_latlon)
+            
+            # Validate data length! GribReader might return partial data.
+            expected_len = len(grib_params) * len(cells_latlon)
+            if values is None or len(values) != expected_len:
+                print(f"\n  WARNING: Data mismatch for {day_date} {hour}:00. Got {len(values) if values else 0} values, expected {expected_len}. Treating as missing.", flush=True)
+                hourly_queue.put((day_date, hour, None))
+            else:
+                hourly_queue.put((day_date, hour, values))
+
+        except Exception as e:
+            # print(f"Process error: {e}", flush=True)
+            hourly_queue.put((day_date, hour, None))
+        finally:
+            if grb_reader:
+                del grb_reader
+            # Cleanup temp file from RAM disk
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            gc.collect()
+
+
+def _assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells):
+    """
+    Collect hourly results and assemble into day records.
+
+    Args:
+        hourly_queue: Queue with (day_date, hour, values) tuples
+        day_results_queue: Queue where completed day_data is placed
+        num_params: Number of parameters (65)
+        num_cells: Number of cells (9)
+    """
+    hours_collected = {}  # (day_date, hour) -> values list
+
+    while True:
+        try:
+            # Wait longer, and don't exit on Empty
+            day_date, hour, values = hourly_queue.get(timeout=1)
+        except Queue.Empty:
+            continue
+
+        if day_date is None:  # Sentinel to stop
+            break
+
+        # Store hourly values (None = missing file)
+        if values is None:
+            hours_collected[(day_date, hour)] = [0.0] * (num_params * num_cells)
+        else:
+            hours_collected[(day_date, hour)] = values
+
+        # Check if we have all 3 hours for this day
+        if (day_date, 6) in hours_collected and \
+           (day_date, 12) in hours_collected and \
+           (day_date, 18) in hours_collected:
+
+            # Assemble day data: [cell1_values, cell2_values, ...]
+            # where cell_values = [hour6_param1..65, hour12_param1..65, hour18_param1..65]
+            day_data = []
+            for cell_idx in range(num_cells):
+                cell_values = []
+                for hour in [6, 12, 18]:
+                    start = cell_idx * num_params
+                    end = start + num_params
+                    cell_values.extend(hours_collected[(day_date, hour)][start:end])
+                day_data.append(cell_values)
+
+            day_results_queue.put((day_date, day_data))
+
+            # Cleanup hourly data for this day (free memory)
+            for h in [6, 12, 18]:
+                del hours_collected[(day_date, h)]
+
+
+
+
+
+
 
 
 class PKLDatasetBuilder:
@@ -131,8 +295,8 @@ class PKLDatasetBuilder:
 
         # Generate cells (1°x1° grid)
         cells_latlon = []
-        for lat in range(int(lat_min), int(lat_max)):
-            for lon in range(int(lon_min), int(lon_max)):
+        for lat in range(int(lat_min), int(lat_max) + 1):
+            for lon in range(int(lon_min), int(lon_max) + 1):
                 cells_latlon.append((float(lat), float(lon)))
 
         self.cells_latlon = cells_latlon
@@ -394,13 +558,17 @@ class PKLDatasetBuilder:
         print(f"    Total parameters: {len(meteo_params)}", flush=True)
         return meteo_params
 
-    def build_meteo_content(self) -> None:
+    def build_meteo_content(self, num_workers: int = 4, queue_size: int = 3) -> None:
         """
         Step 3: Extract weather data from GRIB files.
 
         Creates:
         - meteo_content_by_cell_day.pkl: np.array[nb_days*nb_cells, 195]
           where 195 = 65 parameters × 3 time steps (06, 12, 18 UTC)
+
+        Args:
+            num_workers: Number of worker processes
+            queue_size: Size of raw data queue (default 3)
         """
         print("\n=== Step 3: Extracting weather data ===", flush=True)
 
@@ -423,7 +591,7 @@ class PKLDatasetBuilder:
 
         # Entire atmosphere parameters (1 level each)
         for param in ['Precipitable water', 'Cloud water']:
-            grib_params.append((param, [('entireAtmosphere', 0), ('unknown', 0)]))
+            grib_params.append((param, [('entireAtmosphere', 0), ('atmosphereSingleLayer', 0), ('unknown', 0)]))
 
         # Pressure level parameters (9 levels each)
         pressure_levels = [1000, 900, 800, 700, 600, 500, 400, 300, 200]
@@ -437,55 +605,178 @@ class PKLDatasetBuilder:
             print(f"  ERROR: Expected 65 parameters, got {len(grib_params)}", flush=True)
             return
 
-        # Extract data for each day
-        # Result shape: (nb_days * nb_cells, 195) = (nb_days * nb_cells, 65 * 3)
+        print("  Using 3-stage HYBRID pipeline: Reader (Thread) -> Processors (Processes) -> Assembler (Thread)", flush=True)
+        print(f"  Configuration: 1 Reader (HDD I/O), {num_workers} Workers (CPU), Queue Size {queue_size}", flush=True)
+        print(f"  Press Ctrl+C to gracefully stop (will wait for current tasks to complete)", flush=True)
+
         all_data = []
-        skipped = 0
+        interrupted = False
+        start_time = time.time()
+        completed = 0
+        total_days = len(self.meteo_days)
 
-        for day_date in tqdm.tqdm(self.meteo_days, desc="  Extracting weather"):
-            # For each cell, collect data from all 3 hours
-            for cell_lat, cell_lon in self.cells_latlon:
-                day_values = []
+        # Queues (Must be Multiprocessing Queues for Workers!)
+        # 1. file_queue: Files to read
+        file_queue = Queue.Queue(maxsize=0)
+        
+        # 2. job_queue: Paths to temp files in /dev/shm
+        #    Using multiprocessing.Queue to pass to worker processes
+        job_queue = multiprocessing.Queue(maxsize=queue_size)
+        
+        # 3. hourly_queue: Extracted results
+        #    Using multiprocessing.Queue to receive from worker processes
+        hourly_queue = multiprocessing.Queue(maxsize=1000)
+        
+        # 4. results_queue: Assembled days (Thread-local is fine, but Assembler reads hourly)
+        results_queue = Queue.Queue()
 
-                for hour in [6, 12, 18]:
-                    # Construct GRIB filename
-                    grb_path = os.path.join(
-                        self.gfs_dir,
-                        day_date.strftime('%Y-%m'),
-                        f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
-                    )
+        stop_event = threading.Event()
 
-                    if not os.path.exists(grb_path):
-                        skipped += 1
-                        # Fill with zeros for missing data
-                        day_values.extend([0.0] * len(grib_params))
-                        continue
+        # Fill file queue
+        total_files = len(self.meteo_days) * 3
+        print(f"  Scheduling {total_files} file loads...", flush=True)
+        for day_date in self.meteo_days:
+            for hour in [6, 12, 18]:
+                file_queue.put((day_date, hour))
+        print(f"  File queue filled", flush=True)
+        
+        # Start 1 Reader Thread (Main Process)
+        reader_thread = threading.Thread(
+            target=_file_reader,
+            args=(file_queue, job_queue, self.gfs_dir, stop_event),
+            daemon=True,
+            name="Reader"
+        )
+        reader_thread.start()
+        print(f"  Started Reader thread (HDD -> RAM)", flush=True)
 
+        # Start N Worker Processes (Separate CPUs)
+        processors = []
+        for i in range(num_workers):
+            p = multiprocessing.Process(
+                target=_file_processor,
+                args=(job_queue, hourly_queue, grib_params, self.cells_latlon),
+                name=f"Worker-{i}",
+                daemon=True
+            )
+            p.start()
+            processors.append(p)
+        print(f"  Started {num_workers} Worker processes (RAM -> CPU)", flush=True)
+
+        # Start Assembler Thread (Main Process)
+        assembler = threading.Thread(
+            target=_assemble_day_results,
+            args=(hourly_queue, results_queue, len(grib_params), len(self.cells_latlon)),
+            daemon=True,
+            name="Assembler"
+        )
+        assembler.start()
+        print(f"  Started Assembler thread", flush=True)
+
+        # Collect results in main thread
+        last_print_time = start_time
+        try:
+            while completed < total_days:
+                try:
+                    # Wait briefly for result
+                    day_date, day_data = results_queue.get(timeout=1.0)
+                    all_data.extend(day_data)
+                    completed += 1
+                except Queue.Empty:
+                    # Check if threads/processes are still alive
+                    if not any(t.is_alive() for t in [reader_thread] + processors + [assembler]):
+                        print("  ERROR: All workers died unexpectedly!", flush=True)
+                        break
+                    # Fall through to update status
+                    pass
+
+                # Progress updates (time-based: every 15 seconds)
+                current_time = time.time()
+                if current_time - last_print_time >= 15.0 or completed == total_days:
+                    elapsed = current_time - start_time
+                    speed = completed / elapsed if elapsed > 0 else 0
+                    if speed > 0:
+                        eta_seconds = (total_days - completed) / speed
+                        eta_str = f"{eta_seconds/60:.1f}min"
+                    else:
+                        eta_str = "?"
+
+                    # Diagnostic
                     try:
-                        grb_reader = GribReader(grb_path)
+                        q_jobs = job_queue.qsize()
+                        q_hourly = hourly_queue.qsize()
+                        q_results = results_queue.qsize()
+                    except NotImplementedError:
+                        q_jobs = -1
+                        q_hourly = -1
+                        q_results = -1
 
-                        # Get values for this cell
-                        values = grb_reader.getValues(grib_params, [(cell_lat, cell_lon)])
+                    print(f"  [{completed}/{total_days}] {completed/total_days*100:.1f}% | "
+                            f"Speed: {speed:.2f} days/s | ETA: {eta_str} | "
+                            f"Q: Jobs={q_jobs}/{queue_size} Hourly={q_hourly} Res={q_results}", flush=True)
+                    
+                    last_print_time = current_time
 
-                        if values is None or len(values) != len(grib_params):
-                            day_values.extend([0.0] * len(grib_params))
-                        else:
-                            day_values.extend(values)
+        except KeyboardInterrupt:
+            print("\n  Interrupted! Stopping threads...", flush=True)
+            interrupted = True
+            stop_event.set()
 
-                    except Exception as e:
-                        print(f"  ERROR reading {grb_path}: {e}", flush=True)
-                        day_values.extend([0.0] * len(grib_params))
-                        skipped += 1
+            # CRITICAL FIX: Drain queues to unblock threads waiting on put()
+            print("  Draining queues to unblock threads...", flush=True)
+            
+            # Helper to drain queue
+            def drain_queue(q):
+                try:
+                    while not q.empty():
+                        q.get_nowait()
+                        if hasattr(q, 'task_done'):
+                            q.task_done()
+                except (Queue.Empty, ValueError, Exception):
+                    pass
 
-                # day_values should have 65 * 3 = 195 values
-                if len(day_values) != 195:
-                    print(f"  WARNING: Expected 195 values, got {len(day_values)} for {day_date} cell ({cell_lat}, {cell_lon})", flush=True)
-                    day_values = day_values[:195] + [0.0] * (195 - len(day_values))
+            drain_queue(job_queue)
+            drain_queue(hourly_queue)
+            drain_queue(file_queue)
 
-                all_data.append(day_values)
+            # Send sentinels (non-blocking)
+            for _ in range(num_workers + 5):
+                try: file_queue.put((None, None), block=False)
+                except Exception: pass
+                
+                try: job_queue.put((None, None, None), block=False)
+                except Exception: pass
+                
+                try: hourly_queue.put((None, None, None), block=False)
+                except Exception: pass
 
-        if skipped > 0:
-            print(f"  WARNING: Skipped {skipped} GRIB files (missing or error)", flush=True)
+            # Wait for threads/processes
+            print("  Waiting for workers to exit...", flush=True)
+            reader_thread.join(timeout=2.0)
+            assembler.join(timeout=2.0)
+            
+            for p in processors:
+                p.terminate() # Force kill workers on interrupt
+                p.join(timeout=1.0)
+
+        # Normal completion
+        if not interrupted:
+            reader_thread.join()
+            # Send sentinels to workers
+            for _ in range(num_workers):
+                job_queue.put((None, None, None))
+            for p in processors:
+                p.join()
+            # Send sentinel to assembler
+            hourly_queue.put((None, None, None))
+            assembler.join()
+
+        if interrupted:
+            print(f"  ERROR: Interrupted by user. Partial results ({len(all_data)} records) NOT saved.", flush=True)
+            print("  Run again to continue (indices are cached, will resume faster)", flush=True)
+            raise SystemExit(130)
+
+        print(f"  Total processed: {len(all_data)} cell-day records", flush=True)
 
         # Convert to numpy array
         meteo_content = np.array(all_data, dtype=np.float32)
@@ -780,8 +1071,12 @@ def main() -> int:
                        help="Flight source to use")
     parser.add_argument("--skip-meteo", action="store_true",
                        help="Skip meteorological data processing")
-    parser.add_argument("--skip-flights", action="store_true",
-                       help="Skip flights processing")
+    parser.add_argument("--include-flights", action="store_true",
+                       help="Include flights processing from database (default: skipped, use xContest data instead)")
+    parser.add_argument("--workers", type=int, default=os.environ.get("BUILD_THREADS", multiprocessing.cpu_count()),
+                       help="Number of worker processes (default: from BUILD_THREADS env or CPU count)")
+    parser.add_argument("--queue-size", type=int, default=os.environ.get("BUILD_QUEUE_SIZE", 3),
+                       help="Size of GRIB data queue (default: from BUILD_QUEUE_SIZE env or 3)")
 
     args = parser.parse_args()
 
@@ -808,7 +1103,7 @@ def main() -> int:
 
     # Connect to database (if needed for flights)
     db = None
-    if not args.skip_flights:
+    if args.include_flights:
         print(f"\nConnecting to database...", flush=True)
         try:
             db = connect_db(args.db_url, None)
@@ -834,8 +1129,8 @@ def main() -> int:
             training_dates = os.environ.get("TRAINING_DATES")
             builder.build_meteo_days(training_dates)
 
-            # Step 3: Extract meteo content
-            builder.build_meteo_content()
+            # Step 3: Extract meteo content (hybrid 3-stage pipeline)
+            builder.build_meteo_content(num_workers=args.workers, queue_size=args.queue_size)
         else:
             print("\n=== Skipping meteorological data ===", flush=True)
             # Create empty placeholders
@@ -844,10 +1139,10 @@ def main() -> int:
             builder.save_pkl("meteo_content_by_cell_day", np.zeros((0, 195), dtype=np.float32))
 
         # Step 4: Build flights
-        if not args.skip_flights:
+        if args.include_flights:
             builder.build_flights_by_cell_day(source=args.source)
         else:
-            print("\n=== Skipping flights data ===", flush=True)
+            print("\n=== Skipping flights data (using xContest data via build_pkl_from_xcontest.py) ===", flush=True)
             builder.save_pkl("flights_by_cell_day", [])
 
         # Step 5: Build mountainess

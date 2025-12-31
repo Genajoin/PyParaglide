@@ -21,12 +21,13 @@ import pickle
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, date
+from typing import List, Tuple, Optional, Dict, Any
 
 # Импорт ElevationReader
 from elevation_reader import ElevationReader
 
 # Пути
-PROJECT_ROOT = Path("/home/gena/dev/Paraglidable")
+PROJECT_ROOT = Path("/workspaces/Paraglidable")
 FLIGHTS_DIR = PROJECT_ROOT / "data" / "flights"
 MERGED_DIR = FLIGHTS_DIR / "merged"
 PKL_DIR = PROJECT_ROOT / "neural_network" / "bin" / "data"
@@ -35,7 +36,7 @@ PKL_DIR = PROJECT_ROOT / "neural_network" / "bin" / "data"
 class PklIndexer:
     """Вычисляет cell_index и day_index из существующих PKL файлов."""
 
-    def __init__(self, date_ranges: list[tuple[date, date]] | None = None):
+    def __init__(self, date_ranges: Optional[List[Tuple[date, date]]] = None):
         with open(PKL_DIR / "sorted_cells_latlon.pkl", 'rb') as f:
             self.sorted_cells_latlon = pickle.load(f, encoding='latin1')
         with open(PKL_DIR / "meteo_days.pkl", 'rb') as f:
@@ -52,7 +53,7 @@ class PklIndexer:
         self.nb_cells = len(self.sorted_cells_latlon)
         self.nb_days = len(self.meteo_days)
 
-    def get_cell_index(self, lat: float, lon: float) -> int | None:
+    def get_cell_index(self, lat: float, lon: float) -> Optional[int]:
         """Вычисляет индекс ячейки по координатам."""
         cell_lat = int(math.floor(lat))
         cell_lon = int(math.floor(lon))
@@ -61,7 +62,7 @@ class PklIndexer:
         except ValueError:
             return None
 
-    def get_day_index(self, dt_str: str) -> int | None:
+    def get_day_index(self, dt_str: str) -> Optional[int]:
         """Вычисляет индекс дня из строки datetime."""
         flight_date = datetime.strptime(dt_str, '%Y-%m-%d %H:%M:%S').date()
         return self.day_to_idx.get(flight_date)
@@ -142,14 +143,26 @@ def get_flight_date_range(flights):
 
 def parse_datetime(dt_str):
     """Парсит datetime строку в формат yyyy-mm-dd hh:mm:ss."""
-    try:
-        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
-        return dt.strftime('%Y-%m-%d %H:%M:%S')
-    except (ValueError, AttributeError):
+    if not dt_str:
         return None
+    # Пробуем разные форматы
+    formats = [
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%dT%H:%M:%S.%fZ',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%dT%H:%M:%S%z',
+        '%Y-%m-%dT%H:%M:%S',
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(dt_str, fmt)
+            return dt.strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+    return None
 
 
-def parse_date_ranges(dates_str: str) -> list[tuple[date, date]] | None:
+def parse_date_ranges(dates_str: str) -> Optional[List[Tuple[date, date]]]:
     """Парсит строки диапазонов дат типа '2021-06-01:2021-09-30,2022-06-01:2022-09-30'
 
     Returns: Список кортежей (start_date, end_date) или None для без фильтрации
@@ -172,7 +185,7 @@ def parse_date_ranges(dates_str: str) -> list[tuple[date, date]] | None:
     return sorted(ranges)  # Сортировка для согласованности
 
 
-def is_date_in_ranges(target_date: date, ranges: list[tuple[date, date]]) -> bool:
+def is_date_in_ranges(target_date: date, ranges: List[Tuple[date, date]]) -> bool:
     """Проверяет, попадает ли дата в один из указанных диапазонов."""
     if not ranges:
         return True  # Без фильтрации
@@ -182,14 +195,14 @@ def is_date_in_ranges(target_date: date, ranges: list[tuple[date, date]]) -> boo
     return False
 
 
-def filter_meteo_days(meteo_days: list[date], ranges: list[tuple[date, date]]) -> list[date]:
+def filter_meteo_days(meteo_days: List[date], ranges: List[Tuple[date, date]]) -> List[date]:
     """Фильтрует список meteo_days, оставляя только даты в указанных диапазонах."""
     if not ranges:
         return meteo_days
     return [d for d in meteo_days if is_date_in_ranges(d, ranges)]
 
 
-def parse_bbox(bbox_str: str) -> tuple[float, float, float, float] | None:
+def parse_bbox(bbox_str: str) -> Optional[Tuple[float, float, float, float]]:
     """Парсит bbox строку 'lat_min,lat_max,lon_min,lon_max'."""
     if not bbox_str:
         return None

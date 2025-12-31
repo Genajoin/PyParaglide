@@ -1,252 +1,179 @@
 # Руководство по развёртыванию Paraglidable
 
-Этот документ описывает пошаговый процесс развёртывания проекта Paraglidable с использованием Docker.
+Этот документ описывает пошаговый процесс развёртывания проекта Paraglidable.
 
 ## Предварительные требования
 
 - Установленный Docker на хостовой системе
-- Минимум 2ГБ свободного дискового пространства для загрузки данных
-- Порт 8080 доступен на хосте (или измените проброс портов при необходимости)
+- Минимум 100ГБ свободного дискового пространства (для GFS данных)
+- Порт 8001 доступен на хосте
 
-## Шаги развёртывания
+## Рабочая инфраструктура
 
-### 1. Сборка Docker-образа
+**Docker Compose (рекомендуется):**
 
 ```bash
-cd /path/to/Paraglidable
-docker build -t paraglidable2 docker/
+# Запуск контейнера
+docker compose up -d
+
+# Остановка
+docker compose stop
 ```
 
-Это создаёт Docker-образ со всеми необходимыми зависимостями:
-- TensorFlow 1.15.0
-- Python 3 с необходимыми пакетами
-- Qt 5 для C++ tiler
-- Apache HTTP server с PHP
+**Порты:**
+- `http://localhost:8001` — веб-интерфейс
+- `http://localhost:8888` — Jupyter (после `sh scripts/start_jupyter.sh` внутри)
 
-**Время сборки:** ~5-10 минут (зависит от скорости сети)
+## Подготовка данных для обучения
 
-### 2. Запуск Docker-контейнера
+### Шаг 1: Сбор данных полётов (xContest)
 
 ```bash
-docker run -d --name paraglidable \
-    -v /path/to/Paraglidable:/workspaces/Paraglidable \
-    -p 8080:80 \
-    paraglidable2 tail -f /dev/null
+cd extensions/xcontest_data_collector/
+pip install -r requirements.txt
+python main.py --collect-flights
 ```
 
-**Параметры:**
-- `-v /path/to/Paraglidable:/workspaces/Paraglidable` - Монтирование директории проекта
-- `-p 8080:80` - Проброс порта 8080 хоста на порт 80 контейнера
-- `--name paraglidable` - Имя контейнера
+Создаёт файлы в `data/flights/`:
+- `xcontest_flights_YYYY-MM-DD-sl-XX.json`
 
-### 3. Загрузка обучающих данных
+### Шаг 2: Скачивание GFS данных
 
 ```bash
-docker exec paraglidable python3 /workspaces/Paraglidable/scripts/download_data.py
+# Лето 2021
+python3 scripts/download_GFS.py \
+  --start-date 2021-06-01 \
+  --end-date 2021-08-31 \
+  --data-dir data/gfs/anl \
+  --hours 6,12,18 \
+  --filter
+
+# Повторить для 2022, 2023, 2024, 2025
 ```
 
-**Загружает:** ~200МБ исторических данных о полётах и погоде
-**Расположение:** `/workspaces/Paraglidable/neural_network/bin/data/`
+**Расчет размера:** ~70 GB за сезон с фильтром
 
-### 4. Загрузка elevation-тайлов
+### Шаг 3: Настройка `.env`
 
 ```bash
-docker exec paraglidable python3 /workspaces/Paraglidable/scripts/download_elevation_tiles.py
+# Копируем пример
+cp .env.example .env
+
+# Редактируем .env
+nano .env
 ```
 
-**Загружает:** ~260МБ данных о высотах
-**Расположение:** `/workspaces/Paraglidable/tiler/_cache/elevation/`
-
-### 5. Сборка C++ Tiler
-
+**Ключевые настройки:**
 ```bash
-docker exec paraglidable bash -c "cd /workspaces/Paraglidable/tiler/Tiler && qmake Tiler.pro && make"
+TRAINING_BBOX=45,47,13,15           # 4 ячейки (Slovenia)
+TRAINING_DATES=2021-06-01:2021-08-31,2022-06-01:2022-08-31,...
+GFS_DIR=data/gfs/anl
+PKL_DIR=neural_network/bin/data
 ```
 
-**Результат:** исполняемый файл `/workspaces/Paraglidable/tiler/Tiler/Tiler`
-
-### 6. Настройка веб-сервера Apache
+### Шаг 4: Генерация PKL файлов
 
 ```bash
-# Обновление DocumentRoot
-docker exec paraglidable bash -c "sudo sed -i 's|DocumentRoot /var/www/html|DocumentRoot /workspaces/Paraglidable/www|' /etc/apache2/sites-available/000-default.conf"
-
-# Добавление директивы Directory
-docker exec paraglidable bash -c "sudo bash -c 'cat >> /etc/apache2/sites-available/000-default.conf << EOF
-<Directory /workspaces/Paraglidable/www>
-    Options Indexes FollowSymLinks
-    AllowOverride All
-    Require all granted
-</Directory>
-EOF'"
-
-# Включение модуля rewrite (требуется для .htaccess)
-docker exec paraglidable bash -c "sudo a2enmod rewrite"
-
-# Запуск Apache
-docker exec paraglidable bash -c "sudo apache2ctl start"
+python3 scripts/build_pkl_dataset.py --skip-flights
 ```
 
-### 7. Генерация прогноза
+**Создаёт:**
+- `sorted_cells_latlon.pkl` — ячейки по bbox
+- `sorted_cells.pkl` — индексы в GRIB сетке
+- `meteo_days.pkl` — дни (фильтруется по `TRAINING_DATES`)
+- `meteo_content_by_cell_day.pkl` — матрица погодных данных
+- `mountainess_by_cell_alt.pkl` — гористость
 
-После развёртывания сайт пустой — нужно сгенерировать прогноз:
+### Шаг 5: Извлечение данных обучения
 
 ```bash
-# Создать директорию для тайлов
-docker exec paraglidable mkdir -p /workspaces/Paraglidable/www/data/tiles
-
-# Запустить генерацию прогноза (запускать из neural_network!)
-docker exec paraglidable bash -c "cd /workspaces/Paraglidable/neural_network && python3 forecast.py"
+python3 scripts/extract_training_data.py --cluster-distance 15
 ```
 
-**Что делает этот скрипт:**
-1. Скачивает данные GFS с NOAA (~100-200МБ)
-2. Обрабатывает GRIB файлы через pygrib
-3. Запускает ML-прогноз через TensorFlow
-4. Генерирует аргументы для tiler
-5. Запускает C++ Tiler для создания PNG тайлов
+**Создаёт:**
+- `data/flights/merged/training_flights.json`
+- `data/flights/merged/spots.json`
+- `data/flights/merged/stats.json`
 
-**Время выполнения:** 10-20 минут
+---
 
-**Результат:**
-- 27030+ PNG тайлов в `/workspaces/Paraglidable/www/data/tiles/`
-- Прогноз на 10 дней вперёд
-- Файлы `spots.json` с прогнозом для конкретных локаций
-
-### 8. Доступ к приложению
-
-После генерации прогноза откройте браузер: **http://localhost:8080/**
-
-## Проверочные команды
+## Сборка C++ Tiler
 
 ```bash
-# Проверка статуса контейнера
-docker ps | grep paraglidable
-
-# Проверка процессов Apache
-docker exec paraglidable bash -c "ps aux | grep apache"
-
-# Проверка веб-интерфейса
-curl -s http://localhost:8080/ | head -20
-
-# Проверка наличия исполняемого файла tiler
-docker exec paraglidable ls -la /workspaces/Paraglidable/tiler/Tiler/Tiler
-
-# Проверка наличия обучающих данных
-docker exec paraglidable ls -la /workspaces/Paraglidable/neural_network/bin/data/
-
-# Проверка сгенерированных тайлов
-docker exec paraglidable ls -la /workspaces/Paraglidable/www/data/tiles/
-docker exec paraglidable bash -c "find /workspaces/Paraglidable/www/data/tiles/ -name '*.png' | wc -l"
-
-# Проверка spots.json
-docker exec paraglidable bash -c "find /workspaces/Paraglidable/www/data/tiles/ -name 'spots.json'"
+cd scripts/
+sh build_tiler.sh
 ```
 
-## Опционально: Загрузка фоновых тайлов
+**Результат:** `tiler/Tiler/Tiler`
 
-Для фоновых картографических тайлов (180МБ):
+---
 
-```bash
-docker exec paraglidable python3 /workspaces/Paraglidable/scripts/download_background_tiles.py
-```
-
-## Работа внутри контейнера
+## Генерация прогноза
 
 ```bash
-# Вход в оболочку контейнера
-docker exec -it paraglidable bash
-
-# Обучение нейросети
-cd /workspaces/Paraglidable/neural_network
-python train.py
-
-# Запуск прогноза
-cd /workspaces/Paraglidable/neural_network
+cd neural_network/
 python forecast.py
 ```
 
-## Управление контейнером
+**Что делает:**
+1. Скачивает GFS данные на ближайшие 10 дней
+2. Запускает ML-прогноз через TensorFlow
+3. Генерирует PNG тайлы через C++ Tiler
+
+**Время выполнения:** 10-20 минут
+
+---
+
+## Проверка
 
 ```bash
-# Остановка контейнера
-docker stop paraglidable
+# Проверка PKL файлов
+python3 -c "
+import pickle
+cells = pickle.load(open('neural_network/bin/data/sorted_cells_latlon.pkl', 'rb'))
+days = pickle.load(open('neural_network/bin/data/meteo_days.pkl', 'rb'))
+print(f'Ячеек: {len(cells)}')
+print(f'Период: {days[0]} - {days[-1]}')
+print(f'Дней: {len(days)}')
+"
 
-# Запуск контейнера (если уже создан)
-docker start paraglidable
+# Проверка тайлов
+find www/data/tiles/ -name '*.png' | wc -l
 
-# Перезапуск Apache после перезапуска контейнера
-docker exec paraglidable bash -c "sudo apache2ctl start"
-
-# Удаление контейнера (осторожно!)
-docker stop paraglidable && docker rm paraglidable
+# Проверка Apache
+curl -s http://localhost:8001/ | head -10
 ```
 
-## Устранение неполадок
+---
 
-### Apache показывает ошибку 500 Internal Server Error
+## Источники данных
 
-Включите модуль rewrite:
-```bash
-docker exec paraglidable bash -c "sudo a2enmod rewrite && sudo apache2ctl restart"
-```
+### Данные полётов
 
-### Apache показывает стандартную страницу вместо Paraglidable
+| Источник | Статус | Описание |
+|----------|--------|----------|
+| **xContest API** | ✅ Работает | `extensions/xcontest_data_collector/` |
+| IGC scraping | ⚠️ Deprecated | Не поддерживается |
 
-Проверьте конфигурацию DocumentRoot:
-```bash
-docker exec paraglidable cat /etc/apache2/sites-available/000-default.conf | grep DocumentRoot
-```
+### Метео-данные (GFS)
 
-Должно показывать: `DocumentRoot /workspaces/Paraglidable/www`
+| Источник | Период | Статус | Примечания |
+|----------|--------|--------|------------|
+| **AWS S3** | 2021+ | ✅ Работает | `scripts/download_GFS.py` |
+| NCAR RDA | 2000+ | ❓ Не протестирован | Требует регистрацию |
 
-### Порт 8080 уже занят
+---
 
-Измените проброс портов:
-```bash
-docker run -d --name paraglidable \
-    -v /path/to/Paraglidable:/workspaces/Paraglidable \
-    -p 9090:80 \
-    paraglidable2 tail -f /dev/null
-```
+## Troubleshooting
 
-Затем доступ по адресу: http://localhost:9090/
+### Проблема: Нет GFS данных для некоторых дней
 
-### Полная пересборка с нуля
+**Решение:** Скрипт `build_pkl_dataset.py` покажет недостающие дни и предложит команды для скачивания.
 
-```bash
-docker stop paraglidable && docker rm paraglidable
-docker rmi paraglidable2
-# Затем начните с шага 1
-```
+### Проблема: mountess = None
 
-## Быстрое развёртывание одной командой
+**Решение:** Убедитесь что `tiler/_cache/elevation/` содержит данные высот.
 
-Для опытных пользователей — сокращённая версия:
+### Проблема: Ячейки не совпадают с bbox
 
-```bash
-# Сборка и запуск
-docker build -t paraglidable2 docker/ && \
-docker run -d --name paraglidable -v $(pwd):/workspaces/Paraglidable -p 8080:80 paraglidable2 tail -f /dev/null
-
-# Настройка
-docker exec paraglidable python3 /workspaces/Paraglidable/scripts/download_data.py && \
-docker exec paraglidable python3 /workspaces/Paraglidable/scripts/download_elevation_tiles.py && \
-docker exec paraglidable bash -c "cd /workspaces/Paraglidable/tiler/Tiler && qmake Tiler.pro && make" && \
-docker exec paraglidable bash -c "sudo sed -i 's|DocumentRoot /var/www/html|DocumentRoot /workspaces/Paraglidable/www|' /etc/apache2/sites-available/000-default.conf && sudo a2enmod rewrite && sudo apache2ctl start"
-
-# Генерация прогноза (после настройки)
-docker exec paraglidable bash -c "cd /workspaces/Paraglidable/neural_network && python3 forecast.py"
-```
-
-## Расположение файлов после развёртывания
-
-| Компонент | Путь в контейнере |
-|-----------|-------------------|
-| Веб-файлы | `/workspaces/Paraglidable/www/` |
-| Нейросеть | `/workspaces/Paraglidable/neural_network/` |
-| Исполняемый файл tiler | `/workspaces/Paraglidable/tiler/Tiler/Tiler` |
-| Обучающие данные | `/workspaces/Paraglidable/neural_network/bin/data/` |
-| Elevation-тайлы | `/workspaces/Paraglidable/tiler/_cache/elevation/` |
-| Сгенерированные тайлы | `/workspaces/Paraglidable/www/data/tiles/` |
-| Конфигурация Apache | `/etc/apache2/sites-available/000-default.conf` |
+**Решение:** Проверьте `TRAINING_BBOX` в `.env` — используется для создания `sorted_cells_latlon.pkl`.
