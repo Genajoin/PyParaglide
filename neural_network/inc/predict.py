@@ -1,6 +1,6 @@
 # coding: utf-8
 
-import sys, os
+import sys, os, math
 import numpy as np
 
 ################################################################################################
@@ -139,8 +139,18 @@ class Predict:
 
 		# cells population
 		popus = []
-		for c in range(20):
-			popus += [np.mean(np.load(self.models_directory+"/weights/population_alt_cell_%d.npy"%c))]
+		c = 0
+		while True:
+			filename = self.models_directory + "/weights/population_alt_cell_%d.npy" % c
+			if os.path.exists(filename):
+				popus += [np.mean(np.load(filename))]
+				c += 1
+			else:
+				break
+		
+		if not popus:
+			Verbose.print_text(0, "[WARNING] No population weights found in " + self.models_directory + "/weights/")
+			return 0.6 / mean_dow # Fallback
 		
 		return  0.6/mean_dow/np.mean(popus) # TODO
 
@@ -262,20 +272,24 @@ class ForecastAndAnl:
 
 		# ========================================================================
 		# Create and fill prediction grid
-		#
-		# params:
-		#    - grid_desc_predictions
-		# inputs:
-		#    - distinct_latitudes
-		#    - distinct_longitudes
-		#    - meteo_matrix
-		#    - geopotential_height_indices
-		#    - predictions
-		# outputs:
-		#    - prediction_grid
 		# ========================================================================
 
-		prediction_grid = GridLatLon(grid_desc_predictions[0], grid_desc_predictions[1], grid_desc_predictions[2], grid_desc_predictions[3])
+		# Calculate bounding box from crops to define grid origin and size
+		min_lat, max_lat, min_lon, max_lon = 1000, -1000, 1000, -1000
+		for crop in crops:
+			min_lat = min(min_lat, distinct_latitudes[crop[0]], distinct_latitudes[crop[1]-1])
+			max_lat = max(max_lat, distinct_latitudes[crop[0]], distinct_latitudes[crop[1]-1])
+			min_lon = min(min_lon, distinct_longitudes[crop[2]], distinct_longitudes[crop[3]-1])
+			max_lon = max(max_lon, distinct_longitudes[crop[2]], distinct_longitudes[crop[3]-1])
+
+		# Origin must be relative to global -90/-180 to keep indexing consistent
+		origin_lat = min_lat - 0.5 * grid_desc_predictions[0] + 90.0
+		origin_lon = min_lon - 0.5 * grid_desc_predictions[1] + 180.0
+		nb_lat = int(math.ceil((max_lat - min_lat + grid_desc_predictions[0]) / grid_desc_predictions[0]))
+		nb_lon = int(math.ceil((max_lon - min_lon + grid_desc_predictions[1]) / grid_desc_predictions[1]))
+
+		prediction_grid = GridLatLon(grid_desc_predictions[0], grid_desc_predictions[1], 
+									 origin_lat, origin_lon)
 
 		p = 0
 		for crop in crops:  # number of data rectangles to read in the GRIB grid

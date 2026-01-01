@@ -19,7 +19,8 @@ class WindFlyabilityBlock(tf.keras.Model):
     """
     Wind flyability prediction block.
 
-    Predicts flyability based on wind data across altitudes.
+    Input shape: (batch, nb_cells, nb_altitudes, 3)
+    Output shape: (batch, nb_cells, nb_altitudes)
     """
 
     def __init__(self, nb_altitudes: int, nb_cells: int, humidity_dim: int, name: str = "wind_flyability_block"):
@@ -29,22 +30,23 @@ class WindFlyabilityBlock(tf.keras.Model):
         self.humidity_dim = humidity_dim
         self.dropout_rate = 0.05
 
-        self.reshape = tf.keras.layers.Lambda(lambda x: tf.reshape(x, (-1, 3 * humidity_dim)))
         self.dropout1 = tf.keras.layers.Dropout(self.dropout_rate)
-        self.dense1 = tf.keras.layers.Dense(4, activation="tanh", name="WindFlyability_1")
+        self.dense1 = tf.keras.layers.Dense(8, activation="tanh", name="WindFlyability_1")
         self.dropout2 = tf.keras.layers.Dropout(self.dropout_rate)
         self.dense2 = tf.keras.layers.Dense(1, activation="sigmoid", name="WindFlyability_2")
-        self.tile = tf.keras.layers.Lambda(
-            lambda x: tf.tile(tf.reshape(x, (-1, nb_cells, 1)), (1, 1, nb_altitudes))
-        )
 
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
-        x = self.reshape(inputs)
+        # Input: (batch, nb_cells, nb_altitudes, 3)
+        # Reshape to (batch * nb_cells * nb_altitudes, 3) - flatten everything except last dim
+        x = tf.reshape(inputs, (-1, 3))
+
         x = self.dropout1(x, training=training)
         x = self.dense1(x)
         x = self.dropout2(x, training=training)
         x = self.dense2(x)
-        return self.tile(x)
+
+        # Reshape back to (batch, nb_cells, nb_altitudes)
+        return tf.reshape(x, (-1, self.nb_cells, self.nb_altitudes))
 
 
 class HumidityFlyabilityBlock(tf.keras.Model):
@@ -400,14 +402,14 @@ class PopulationBlock(tf.keras.layers.Layer):
         """
         prediction, date, dow = inputs
 
-        # Expand prediction to super resolution
-        prediction_expanded = tf.repeat(
+        # Expand prediction to super resolution (use repeat_elements like original)
+        prediction = tf.keras.backend.repeat_elements(
             prediction, self.super_resolution * self.super_resolution, axis=1
         )  # (batch, nbCells*super_resolution^2, nbAltitudes)
 
         # Tile population weights
         popu_reshaped = tf.reshape(
-            self.popu, (1, tf.shape(self.popu)[0], tf.shape(self.popu)[1])
+            self.popu, (1, int(self.popu.shape[0]), int(self.popu.shape[1]))
         )  # (1, nbCells*super_resolution^2, nbAltitudes)
         tiled_popu = tf.tile(popu_reshaped, (tf.shape(prediction)[0], 1, 1))
 
@@ -417,8 +419,9 @@ class PopulationBlock(tf.keras.layers.Layer):
         dow_factor_dot = tf.matmul(dow, dow_factor_reshaped)  # (batch, 1)
         day_factor_scalar = (1.0 + self.var_date_factor * date) * dow_factor_dot  # (batch, 1)
         day_factor_vector = tf.reshape(day_factor_scalar, (-1, 1, 1))  # (batch, 1, 1)
+        # KEY FIX: first element is 1 (batch dim), not tf.shape(tiled_popu)[0]
         day_factor_vector = tf.tile(
-            day_factor_vector, (tf.shape(tiled_popu)[0], tf.shape(tiled_popu)[1], tf.shape(tiled_popu)[2])
+            day_factor_vector, (1, int(tiled_popu.shape[1]), int(tiled_popu.shape[2]))
         )  # (batch, nbCells*super_resolution^2, nbAlts)
         tiled_popu = day_factor_vector * tiled_popu
 

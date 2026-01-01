@@ -117,3 +117,8 @@ training_run.log
 # Temporary files
 tmp/
 temp/
+archive/*
+neural_network/bin/models/*
+scripts/legacy/*
+data/igc/*
+.*

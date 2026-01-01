@@ -145,7 +145,8 @@ class ModelCells:
         wind_flyability_block = WindFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
         humidity_flyability_block = HumidityFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
 
-        # Create separate population blocks for each output (like SPOTS model)
+        # Create separate population blocks for each output
+        # (Original uses single block, but requires all inputs to have same shape)
         population_block_flown = PopulationBlock(
             problem_formulation,
             var_date_factor,
@@ -201,9 +202,7 @@ class ModelCells:
         flown_prediction = population_block_flown([flyability_prediction, input_date, input_dow])
         crossed_prediction = population_block_crossed([crossability_prediction, input_date, input_dow])
         wind_flown_prediction = population_block_wind([wind_flyability_prediction, input_date, input_dow])
-        humidity_flown_prediction = population_block_humidity(
-            [humidity_flyability_prediction, input_date, input_dow]
-        )
+        humidity_flown_prediction = population_block_humidity([humidity_flyability_prediction, input_date, input_dow])
 
         # ==============================================================================
         # Create model

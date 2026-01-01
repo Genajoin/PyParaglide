@@ -221,6 +221,9 @@ class DatasetBuilder:
 
         print(f"  Found {len(json_files)} flight files")
 
+        nb_days = (end - start).days + 1
+        nb_cells = len(self.cells)
+
         # Process flights (simplified - full implementation in scripts/)
         flights_by_cell_day = []
         spots = []
@@ -234,9 +237,26 @@ class DatasetBuilder:
             except Exception as e:
                 print(f"    Warning: Error processing {json_file.name}: {e}")
 
+        # Create mountainess data (elevation-based terrain data)
+        # For now, use zeros - should be computed from elevation tiles
+        mountainess_by_cell_alt = np.zeros((nb_cells, 5), dtype=np.float32)
+
+        # Convert to proper format if needed
+        if isinstance(flights_by_cell_day, list):
+            flights_array = np.zeros((nb_cells * nb_days,), dtype=object)
+            for i in range(len(flights_array)):
+                flights_array[i] = []
+            # Copy processed data if any
+            for i, item in enumerate(flights_by_cell_day):
+                if i < len(flights_array):
+                    flights_array[i] = item
+            flights_by_cell_day = flights_array
+
         # Save structures
         with open(self.output_dir / "flights_by_cell_day.pkl", "wb") as f:
             pickle.dump(flights_by_cell_day, f)
+        with open(self.output_dir / "mountainess_by_cell_alt.pkl", "wb") as f:
+            pickle.dump(mountainess_by_cell_alt, f)
         with open(self.output_dir / "spots.pkl", "wb") as f:
             pickle.dump(spots, f)
 

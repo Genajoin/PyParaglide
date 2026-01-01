@@ -226,7 +226,7 @@ class Trainer:
     def _load_weights(self) -> None:
         """Load model weights from directory."""
         # Try to load weights
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}_weights.h5"
+        weight_path = self.models_dir / f"{self.model_type.name.lower()}_.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded weights from {weight_path}")
@@ -241,7 +241,7 @@ class Trainer:
             self.normalization.save(norm_path)
 
         # Save model weights
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}_weights.h5"
+        weight_path = self.models_dir / f"{self.model_type.name.lower()}_.weights.h5"
         self.model.save_weights(weight_path)
         print(f"[INFO] Saved weights to {weight_path}")
 

@@ -145,7 +145,14 @@ def train(
 
     # Parse cells
     if cells:
-        cells_list = [int(c.strip()) for c in cells.split(",")]
+        # Support both: "--cells 1" (first N cells) and "--cells 0,1,2" (specific indices)
+        parsed = [int(c.strip()) for c in cells.split(",")]
+        if len(parsed) == 1:
+            # Single number means "first N cells"
+            cells_list = list(range(parsed[0]))
+        else:
+            # Multiple numbers mean specific cell indices
+            cells_list = parsed
     else:
         cells_list = None  # Will use all cells
 

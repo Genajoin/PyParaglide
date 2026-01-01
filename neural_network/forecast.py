@@ -68,13 +68,8 @@ class Forecast:
 		self.GFS_resolution            = "0p25"
 		self.nb_days                   = 10
 
-		# Coordinates of the 2 data rectangles taken into the GRIB file
-		# Will fail when the grid will change in the GRIB files
-		# TODO use lat/lon bbox and get indices using distinctLatitudes and distinctLongitudes
-
-		# Le crop doit être un peu plus grand que celui du Tiler C++
-		# Il faut ajouter les tiles d'elevation aussi
-		self.crops = [(93, 274, 0, 140), (93, 274, 1394, 1440)]
+		# Crops will be calculated dynamically based on BBOX
+		self.crops = None
 
 		os.makedirs(self.last_forecast_time_file_dir, exist_ok=True)
 		os.makedirs(self.downloaded_forecasts_dir, exist_ok=True)
@@ -207,6 +202,11 @@ class Forecast:
 		Verbose.print_text(1, "last_forecast_times: "+ str(last_forecast_times))
 
 		for last_forecast_time in last_forecast_times[0:4]:
+			
+			# Reset crops for each new forecast source to ensure correct calculation from new files
+			self.crops = None
+			self.distinct_latitudes = None
+			self.distinct_longitudes = None
 
 			last_forecast_time_dt = datetime.datetime(int(last_forecast_time[0:4]), int(last_forecast_time[4:6]), int(last_forecast_time[6:8]))
 			last_forecast_hour    = int(last_forecast_time[-2:]) # 0, 6, 12, 18
@@ -308,6 +308,33 @@ class Forecast:
 				#======================================================================================
 				# Read weather data
 				#======================================================================================
+
+				# Dynamic crops calculation if bbox is provided
+				if hasattr(self, 'bbox') and self.bbox and not self.crops:
+					from inc.grib_reader import GribReader
+					_, lats, lons = GribReader(meteo_files[0]).getInfos()
+					# Convert longitudes
+					lons = np.array([Utils.convert_longitude(l) for l in lons])
+					
+					lat_min, lat_max, lon_min, lon_max = self.bbox
+					# Find indices with 1 degree margin
+					iLat_min = np.abs(lats - (lat_max + 1)).argmin()
+					iLat_max = np.abs(lats - (lat_min - 1)).argmin()
+					iLon_min = np.abs(lons - (lon_min - 1)).argmin()
+					iLon_max = np.abs(lons - (lon_max + 1)).argmin()
+					
+					# Ensure min < max for indices
+					if iLat_min > iLat_max: iLat_min, iLat_max = iLat_max, iLat_min
+					if iLon_min > iLon_max: iLon_min, iLon_max = iLon_max, iLon_min
+					
+					self.crops = [(int(iLat_min), int(iLat_max), int(iLon_min), int(iLon_max))]
+					print(f"Dynamic crops calculated: {self.crops} for bbox {self.bbox}")
+					self.distinct_latitudes = lats
+					self.distinct_longitudes = lons
+
+				if not self.crops:
+					Verbose.print_text(1, "[WARNING] Crops not defined, skipping this day")
+					continue
 
 				distinct_latitudes, distinct_longitudes, meteo_matrix = ForecastData.readWeatherData(meteo_files, self.crops)
 
@@ -413,16 +440,35 @@ class Forecast:
 			# find forecast cell for each spot
 			# C'est comme le cellsAndSpots de Train sauf que les cellules sont les cells de forecast (32942 cells)
 			spots_data = SpotsData()
-			spots = spots_data.getSpots(range(80))
+			
+			# Dynamic range of cells based on trained weights
+			trained_cells_count = 0
+			while os.path.exists(self.models_directory + "/weights/population_alt_cell_%d.npy" % trained_cells_count):
+				trained_cells_count += 1
+			
+			spots = spots_data.getSpots(range(trained_cells_count))
+			found_count = 0
 			for kc, cell_spots in enumerate(spots):
 				for ks, spot in enumerate(cell_spots):
-					iCell = (np.abs(lats  - spot.lat).argmin(), np.abs(lons - spot.lon).argmin())
+					# Find closest forecast cell
+					lat_idx = np.abs(lats  - spot.lat).argmin()
+					lon_idx = np.abs(lons - spot.lon).argmin()
+					iCell = (lat_idx, lon_idx)
+					
+					if iCell not in forecastCellsLine:
+						# Try one more time with a slightly more relaxed match if coordinates are very close to boundary
+						# (sometimes argmin picks the index just outside the crop)
+						continue
+					
+					found_count += 1
 					cellLine = forecastCellsLine[iCell]
 					kcks_spot = ((kc, ks), spot.toDict())  # (training cell, ks)
 					if not cellLine in cells_and_spots:
 						cells_and_spots[cellLine] = [kcks_spot]
 					else:
 						cells_and_spots[cellLine] += [kcks_spot]
+			
+			print(f"Associated {found_count} spots with forecast grid cells.")
 			BinObj.save(cells_and_spots, filename_cells_and_spots)
 		else:
 			cells_and_spots = BinObj.load(filename_cells_and_spots)
@@ -504,8 +550,17 @@ class Forecast:
 
 if __name__ == "__main__":
 
+	# Load .env file
+	try:
+		from dotenv import load_dotenv
+		# Search for .env in current and parent directories
+		env_path = os.path.join(os.path.dirname(__file__), '..', '.env')
+		load_dotenv(dotenv_path=env_path)
+	except ImportError:
+		pass
+
 	problem_formulation = ProblemFormulation.CLASSIFICATION
-	model_dir = "./bin/models/%s_1.0.0" % str(problem_formulation).split(".")[-1]
+	model_dir = "./bin/models/%s_2.0.0" % str(problem_formulation).split(".")[-1]
 
 	#######################################################################
 	# Check if script is already running
@@ -526,4 +581,18 @@ if __name__ == "__main__":
 	#######################################################################
 
 	forecast = Forecast(model_dir, problem_formulation)
+	
+	# Try to get BBOX from environment
+	bbox_str = os.environ.get("TRAINING_BBOX")
+	if bbox_str:
+		try:
+			parts = [float(x.strip()) for x in bbox_str.split(',')]
+			if len(parts) == 4:
+				lat_min, lat_max, lon_min, lon_max = parts
+				# We will update crops once we have the first GRIB file info
+				forecast.bbox = (lat_min, lat_max, lon_min, lon_max)
+				print(f"Using BBOX from env: {forecast.bbox}")
+		except Exception as e:
+			print(f"Error parsing TRAINING_BBOX: {e}")
+	
 	forecast.main()

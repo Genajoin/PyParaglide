@@ -72,7 +72,7 @@ class TrainingLogger(tf.keras.callbacks.Callback):
         str_lr = f" lr: {lr:.2e}"
 
         if self.model_type == ModelType.CELLS:
-            losses = ["population_block_loss", "population_block_1_loss", "population_block_2_loss", "population_block_3_loss"]
+            losses = ["population_block_flown_loss", "population_block_crossed_loss", "population_block_wind_loss", "population_block_humidity_loss"]
 
             str_training = "loss: " + self._str_val(logs["loss"]) + " (" + self._str_arr(np.array([logs[l] for l in losses])) + ")"
 
