@@ -58,6 +58,7 @@ data/gfs/
 data/flights/*.json
 data/flights/merged/
 data/models/
+data/pkl/
 data/elevation/
 output/
 

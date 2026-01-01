@@ -13,7 +13,7 @@ from rich.table import Table
 from tqdm import tqdm
 
 from pyparaglide import __version__
-from pyparaglide.config import get_settings
+from pyparaglide.config import get_settings, parse_date_ranges
 from pyparaglide.downloads import GFSDownloader
 from pyparaglide.inference import Forecaster
 from pyparaglide.models.enums import ModelType, ProblemFormulation
@@ -125,13 +125,13 @@ def train(
     Train a PyParaglide model.
 
     Example:
-        pyparaglide train --model cells --data-dir neural_network/bin/data --epochs 55
+        pyparaglide train --model cells --epochs 55
     """
     settings = get_settings()
 
     # Use defaults from settings if not specified
     if data_dir is None:
-        data_dir = str(Path(settings.gfs_dir).parent.parent / "neural_network" / "bin" / "data")
+        data_dir = settings.pkl_dir
     if models_dir is None:
         models_dir = settings.models_dir
 
@@ -296,8 +296,9 @@ def forecast(
 
 @app.command()
 def download(
-    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
-    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
+    dates: str = typer.Option(None, "--dates", "-D", help="Date ranges (format: YYYY-MM-DD:YYYY-MM-DD,...). Overrides .env TRAINING_DATES"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD). Shorthand for single range. Use --dates for multiple ranges"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD). Must be used with --start"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Output directory for GRIB files"),
     hours: str = typer.Option("0,6,12,18", "--hours", "-H", help="UTC hours to download (comma-separated)"),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel download workers"),
@@ -306,18 +307,27 @@ def download(
     """
     Download GFS Analysis data from NOAA.
 
-    Downloads historical GFS Analysis GRIB files for specified date range.
-    If --start/--end are not specified, uses TRAINING_DATES from .env file
-    (which can contain multiple date ranges).
+    Downloads historical GFS Analysis GRIB files for specified date ranges.
+
+    Date sources (in order of priority):
+    1. --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31" (multiple ranges)
+    2. --start/--end (single range)
+    3. TRAINING_DATES from .env (default)
 
     Examples:
-        # Single date range
-        pyparaglide download --start 2021-06-01 --end 2021-08-31
-
-        # Use ranges from .env (TRAINING_DATES)
+        # Use dates from .env (TRAINING_DATES)
         pyparaglide download
 
-        # Multiple ranges from .env with options
+        # Single range with --dates
+        pyparaglide download --dates 2024-06-01:2024-08-31
+
+        # Multiple ranges
+        pyparaglide download --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
+
+        # Legacy format (single range)
+        pyparaglide download --start 2024-06-01 --end 2024-08-31
+
+        # With options
         pyparaglide download --workers 4 --filter
     """
     import datetime as dt
@@ -332,6 +342,39 @@ def download(
 
     console.print(f"[bold cyan]Downloading GFS Analysis data[/bold cyan]\n")
 
+    # Determine date ranges (priority: --dates > --start/--end > .env TRAINING_DATES)
+    if dates:
+        # Parse --dates argument (same format as .env)
+        try:
+            date_ranges = parse_date_ranges(dates)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+    elif start_date and end_date:
+        # Legacy --start/--end format (single range)
+        try:
+            date_ranges = parse_date_ranges(f"{start_date}:{end_date}")
+        except ValueError:
+            console.print(f"[red]Invalid date format[/red]")
+            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+            raise typer.Exit(1)
+    elif start_date or end_date:
+        # Only one of --start/--end specified
+        console.print("[red]Error: --start and --end must be used together, or use --dates instead[/red]")
+        raise typer.Exit(1)
+    else:
+        # Use ranges from .env TRAINING_DATES
+        # parse_training_dates returns strings, so we need to convert back to dates
+        str_ranges = settings.parse_training_dates()
+        if not str_ranges:
+            console.print("[red]Error: No date ranges found. Specify --dates, --start/--end, or set TRAINING_DATES in .env[/red]")
+            raise typer.Exit(1)
+        date_ranges = [
+            (dt.datetime.strptime(start, "%Y-%m-%d").date(),
+             dt.datetime.strptime(end, "%Y-%m-%d").date())
+            for start, end in str_ranges
+        ]
+
     # Create downloader
     downloader = GFSDownloader(
         data_dir=data_dir,
@@ -339,18 +382,6 @@ def download(
         workers=workers,
         filter_grib=filter,
     )
-
-    # Determine date ranges
-    if start_date and end_date:
-        # Single range from arguments
-        date_ranges = [(dt.datetime.strptime(start_date, "%Y-%m-%d").date(),
-                        dt.datetime.strptime(end_date, "%Y-%m-%d").date())]
-    else:
-        # Use ranges from settings
-        date_ranges = settings.parse_training_dates()
-        if not date_ranges:
-            console.print("[red]Error: No date ranges found. Specify --start/--end or set TRAINING_DATES in .env[/red]")
-            raise typer.Exit(1)
 
     # Download all ranges
     total_stats = {"downloaded": 0, "skipped": 0, "failed": 0, "total_mb": 0.0}
@@ -377,8 +408,9 @@ def download(
 
 @app.command()
 def build_dataset(
-    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
-    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
+    dates: str = typer.Option(None, "--dates", "-D", help="Date ranges (format: YYYY-MM-DD:YYYY-MM-DD,...). Overrides .env TRAINING_DATES"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD). Shorthand for single range. Use --dates for multiple ranges"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD). Must be used with --start"),
     gfs_dir: str = typer.Option(None, "--gfs-dir", help="Directory containing GFS GRIB files"),
     flights_dir: str = typer.Option(None, "--flights-dir", help="Directory with xContest JSON files"),
     output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for PKL files"),
@@ -390,17 +422,24 @@ def build_dataset(
     Build PKL dataset from GFS GRIB files and flight data.
 
     Creates the PKL files needed for neural network training.
-    For full functionality, use scripts/build_dataset.py directly.
 
-    If --start/--end are not specified, uses TRAINING_DATES from .env file
-    (which can contain multiple date ranges).
+    Date sources (in order of priority):
+    1. --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31" (multiple ranges)
+    2. --start/--end (single range)
+    3. TRAINING_DATES from .env (default)
 
     Examples:
-        # Single date range
-        pyparaglide build-dataset --start 2021-06-01 --end 2021-08-31
-
-        # Use ranges from .env (TRAINING_DATES)
+        # Use dates from .env (TRAINING_DATES)
         pyparaglide build-dataset
+
+        # Single range with --dates
+        pyparaglide build-dataset --dates 2024-06-01:2024-08-31
+
+        # Multiple ranges
+        pyparaglide build-dataset --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
+
+        # Legacy format (single range)
+        pyparaglide build-dataset --start 2024-06-01 --end 2024-08-31
     """
     import datetime as dt
 
@@ -411,21 +450,42 @@ def build_dataset(
     if flights_dir is None:
         flights_dir = settings.flights_dir
     if output_dir is None:
-        output_dir = str(Path(gfs_dir).parent.parent / "neural_network" / "bin" / "data")
+        output_dir = settings.pkl_dir
     if bbox is None:
         bbox = settings.bbox
 
-    # Determine date ranges
-    if start_date and end_date:
-        # Single range from arguments
-        date_ranges = [(dt.datetime.strptime(start_date, "%Y-%m-%d").date(),
-                        dt.datetime.strptime(end_date, "%Y-%m-%d").date())]
-    else:
-        # Use ranges from settings
-        date_ranges = settings.parse_training_dates()
-        if not date_ranges:
-            console.print("[red]Error: No date ranges found. Specify --start/--end or set TRAINING_DATES in .env[/red]")
+    # Determine date ranges (priority: --dates > --start/--end > .env TRAINING_DATES)
+    if dates:
+        # Parse --dates argument (same format as .env)
+        try:
+            date_ranges = parse_date_ranges(dates)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
             raise typer.Exit(1)
+    elif start_date and end_date:
+        # Legacy --start/--end format (single range)
+        try:
+            date_ranges = parse_date_ranges(f"{start_date}:{end_date}")
+        except ValueError:
+            console.print(f"[red]Invalid date format[/red]")
+            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+            raise typer.Exit(1)
+    elif start_date or end_date:
+        # Only one of --start/--end specified
+        console.print("[red]Error: --start and --end must be used together, or use --dates instead[/red]")
+        raise typer.Exit(1)
+    else:
+        # Use ranges from .env TRAINING_DATES
+        # parse_training_dates returns strings, so we need to convert back to dates
+        str_ranges = settings.parse_training_dates()
+        if not str_ranges:
+            console.print("[red]Error: No date ranges found. Specify --dates, --start/--end, or set TRAINING_DATES in .env[/red]")
+            raise typer.Exit(1)
+        date_ranges = [
+            (dt.datetime.strptime(start, "%Y-%m-%d").date(),
+             dt.datetime.strptime(end, "%Y-%m-%d").date())
+            for start, end in str_ranges
+        ]
 
     console.print(f"[bold cyan]Building PKL dataset[/bold cyan]")
     console.print(f"[dim]Date ranges: {len(date_ranges)}[/dim]\n")

@@ -66,7 +66,7 @@ pip install -e .
 ```bash
 git clone https://github.com/Genajoin/PyParaglide.git
 cd PyParaglide
-pip install -e ".[dev,jupyter]"
+pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -78,16 +78,36 @@ cp .env.example .env
 # Edit .env to set your training dates, bbox, and data directories
 ```
 
+The `.env` file uses this format for date ranges:
+```bash
+# Multiple ranges supported (comma-separated)
+PYPARAGLIDE_TRAINING_DATES=2024-06-01:2024-08-31,2025-06-01:2025-08-31
+```
+
 ### 2. Download Training Data
 
 ```bash
-pyparaglide download --start-date 2024-06-01 --end-date 2024-08-31
+# Use dates from .env (TRAINING_DATES)
+pyparaglide download
+
+# Override with specific range
+pyparaglide download --dates 2024-06-01:2024-08-31
+
+# Multiple ranges
+pyparaglide download --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
+
+# Legacy format (single range)
+pyparaglide download --start 2024-06-01 --end 2024-08-31
 ```
 
 ### 3. Build Dataset
 
 ```bash
+# Use dates from .env
 pyparaglide build-dataset
+
+# Override with specific range
+pyparaglide build-dataset --dates 2024-06-01:2024-08-31
 ```
 
 ### 4. Train Model
@@ -113,6 +133,27 @@ pyparaglide forecast
 | `pyparaglide build-dataset` | Build PKL dataset from GRIB + flights |
 | `pyparaglide train` | Train neural network model |
 | `pyparaglide forecast` | Generate flyability forecast |
+
+### Example: Data Download
+
+```bash
+# Use dates from .env (TRAINING_DATES)
+pyparaglide download
+
+# Single range
+pyparaglide download --dates 2024-06-01:2024-08-31
+
+# Multiple ranges
+pyparaglide download --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
+
+# With parallel downloads
+pyparaglide download --dates 2024-06-01:2024-08-31 --workers 4 --filter
+```
+
+**Date Format Priority:**
+1. `--dates` (new unified format, supports multiple ranges)
+2. `--start/--end` (legacy format, single range)
+3. `.env` TRAINING_DATES (default)
 
 ### Example: Training
 
@@ -152,7 +193,8 @@ PYPARAGLIDE_BBOX=45,47,13,15  # lat_min,lat_max,lon_min,lon_max
 # Data directories
 PYPARAGLIDE_GFS_DIR=data/gfs/anl
 PYPARAGLIDE_FLIGHTS_DIR=data/flights
-PYPARAGLIDE_MODELS_DIR=neural_network/bin/models/CLASSIFICATION_1.0.0
+PYPARAGLIDE_MODELS_DIR=data/models
+PYPARAGLIDE_PKL_DIR=data/pkl
 PYPARAGLIDE_OUTPUT_DIR=output/forecasts
 
 # Processing
@@ -174,10 +216,7 @@ PyParaglide/
 │   ├── models/             # Neural network models
 │   ├── preprocessing/      # Dataset building
 │   └── training/           # Training logic
-├── tests/                  # Unit tests (43 tests)
-├── scripts/                # Legacy scripts (for reference)
-├── neural_network/         # Original TF1 code (deprecated)
-└── www/                    # Web interface (static files)
+└── tests/                  # Unit tests (43 tests)
 ```
 
 ## Model Architecture
@@ -254,6 +293,6 @@ This project is licensed under GPL v3. The original Paraglidable project was als
 
 <div align="center">
 
-**[Live Site](https://paraglidable.com)** • **[Original Project](https://github.com/Genajoin/Paraglidable)** • **[Issues](https://github.com/Genajoin/PyParaglide/issues)**
+**[Original Project](https://github.com/Genajoin/Paraglidable)** • **[Issues](https://github.com/Genajoin/PyParaglide/issues)**
 
 </div>

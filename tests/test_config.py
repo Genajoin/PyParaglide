@@ -4,7 +4,69 @@ Tests for configuration module.
 
 import os
 import pytest
+from datetime import date
 from pydantic import ValidationError
+
+
+class TestParseDateRanges:
+    """Test parse_date_ranges utility function."""
+
+    def test_parse_single_range(self):
+        """Test parsing a single date range."""
+        from pyparaglide.config import parse_date_ranges
+
+        ranges = parse_date_ranges("2024-06-01:2024-08-31")
+
+        assert len(ranges) == 1
+        assert ranges[0] == (date(2024, 6, 1), date(2024, 8, 31))
+
+    def test_parse_multiple_ranges(self):
+        """Test parsing multiple date ranges."""
+        from pyparaglide.config import parse_date_ranges
+
+        ranges = parse_date_ranges("2024-06-01:2024-08-31,2025-06-01:2025-08-31")
+
+        assert len(ranges) == 2
+        assert ranges[0] == (date(2024, 6, 1), date(2024, 8, 31))
+        assert ranges[1] == (date(2025, 6, 1), date(2025, 8, 31))
+
+    def test_parse_empty_string(self):
+        """Test parsing empty string."""
+        from pyparaglide.config import parse_date_ranges
+
+        ranges = parse_date_ranges("")
+        assert ranges == []
+
+    def test_parse_none(self):
+        """Test parsing None."""
+        from pyparaglide.config import parse_date_ranges
+
+        ranges = parse_date_ranges(None)
+        assert ranges == []
+
+    def test_parse_with_spaces(self):
+        """Test parsing with extra spaces."""
+        from pyparaglide.config import parse_date_ranges
+
+        ranges = parse_date_ranges(" 2024-06-01 : 2024-08-31 , 2025-06-01:2025-08-31 ")
+
+        assert len(ranges) == 2
+        assert ranges[0] == (date(2024, 6, 1), date(2024, 8, 31))
+        assert ranges[1] == (date(2025, 6, 1), date(2025, 8, 31))
+
+    def test_parse_invalid_format(self):
+        """Test parsing invalid format raises ValueError."""
+        from pyparaglide.config import parse_date_ranges
+
+        with pytest.raises(ValueError, match="Invalid date range"):
+            parse_date_ranges("2024-06-01")
+
+    def test_parse_invalid_date(self):
+        """Test parsing invalid date raises ValueError."""
+        from pyparaglide.config import parse_date_ranges
+
+        with pytest.raises(ValueError, match="Invalid date format"):
+            parse_date_ranges("invalid:2024-08-31")
 
 
 class TestSettings:

@@ -5,9 +5,55 @@ Pydantic-based settings management with environment variable support.
 All configuration is loaded from environment variables with PYPARAGLIDE_ prefix.
 """
 
+import datetime as dt
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def parse_date_ranges(
+    dates_str: str | None,
+) -> list[tuple[dt.date, dt.date]]:
+    """
+    Parse date ranges string (same format as TRAINING_DATES in .env).
+
+    Format: "YYYY-MM-DD:YYYY-MM-DD,YYYY-MM-DD:YYYY-MM-DD,..."
+
+    Args:
+        dates_str: Date ranges string or None
+
+    Returns:
+        List of (start_date, end_date) tuples
+
+    Raises:
+        ValueError: If format is invalid
+
+    Examples:
+        >>> parse_date_ranges("2024-06-01:2024-08-31")
+        [(date(2024, 6, 1), date(2024, 8, 31))]
+
+        >>> parse_date_ranges("2024-06-01:2024-08-31,2025-06-01:2025-08-31")
+        [(date(2024, 6, 1), date(2024, 8, 31)), (date(2025, 6, 1), date(2025, 8, 31))]
+    """
+    if not dates_str:
+        return []
+
+    ranges = []
+    for part in dates_str.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        dates = part.split(":")
+        if len(dates) != 2:
+            raise ValueError(f"Invalid date range: {part} (expected format: YYYY-MM-DD:YYYY-MM-DD)")
+        try:
+            start = dt.datetime.strptime(dates[0].strip(), "%Y-%m-%d").date()
+            end = dt.datetime.strptime(dates[1].strip(), "%Y-%m-%d").date()
+            ranges.append((start, end))
+        except ValueError as e:
+            raise ValueError(f"Invalid date format in range: {part} ({e})")
+
+    return ranges
 
 
 class Settings(BaseSettings):
@@ -36,8 +82,11 @@ class Settings(BaseSettings):
     # Directory for GFS GRIB weather files
     gfs_dir: str = "data/gfs/anl"
 
+    # Directory for PKL dataset files (training data)
+    pkl_dir: str = "data/pkl"
+
     # Directory containing trained model weights
-    models_dir: str = "data/models/CLASSIFICATION_1.0.0"
+    models_dir: str = "data/models"
 
     # Output directory for forecast results
     output_dir: str = "output/forecasts"
@@ -85,17 +134,14 @@ class Settings(BaseSettings):
         return parts[0], parts[1], parts[2], parts[3]
 
     def parse_training_dates(self) -> list[tuple[str, str]]:
-        """Parse training_dates string into list of (start_date, end_date) tuples."""
-        ranges = []
-        for part in self.training_dates.split(","):
-            part = part.strip()
-            if not part:
-                continue
-            dates = part.split(":")
-            if len(dates) != 2:
-                raise ValueError(f"Invalid training date range: {part}")
-            ranges.append((dates[0].strip(), dates[1].strip()))
-        return ranges
+        """
+        Parse training_dates string into list of (start_date, end_date) tuples.
+
+        Uses parse_date_ranges() utility function but returns strings for backward compatibility.
+        """
+        date_tuples = parse_date_ranges(self.training_dates)
+        # Convert date objects to ISO format strings for backward compatibility
+        return [(start.isoformat(), end.isoformat()) for start, end in date_tuples]
 
 
 @lru_cache

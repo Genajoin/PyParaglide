@@ -14,7 +14,7 @@ python3.12 -m venv .venv
 source .venv/bin/activate
 
 # Install in development mode
-pip install -e ".[dev,jupyter]"
+pip install -e ".[dev]"
 ```
 
 ## Running Tests

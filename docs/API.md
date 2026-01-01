@@ -30,6 +30,7 @@ print(f"GFS dir: {settings.gfs_dir}")
 | `training_dates` | `str` | Date ranges (format: `YYYY-MM-DD:YYYY-MM-DD,...`) |
 | `bbox` | `str` | Bounding box (format: `lat_min,lat_max,lon_min,lon_max`) |
 | `gfs_dir` | `Path` | GFS data directory |
+| `pkl_dir` | `Path` | PKL dataset directory |
 | `flights_dir` | `Path` | Flight data directory |
 | `models_dir` | `Path` | Model weights directory |
 | `output_dir` | `Path` | Forecast output directory |
@@ -101,10 +102,10 @@ from pyparaglide.training import Trainer
 from pyparaglide.models import ModelType, ProblemFormulation
 
 trainer = Trainer(
-    data_dir="data/neural_network/bin/data",
+    data_dir="data/pkl",
     model_type=ModelType.CELLS,
     problem_formulation=ProblemFormulation.CLASSIFICATION,
-    models_dir="neural_network/bin/models/CLASSIFICATION_1.0.0",
+    models_dir="data/models",
 )
 
 # Prepare data
@@ -135,7 +136,7 @@ trainer.save_weights()
 ```python
 from pyparaglide.data import Dataset
 
-dataset = Dataset("data/neural_network/bin/data")
+dataset = Dataset("data/pkl")
 
 # Access metadata
 print(f"Days: {dataset.nb_days}")
@@ -207,8 +208,8 @@ params = reader.list_params()
 from pyparaglide.inference import Forecaster
 
 forecaster = Forecaster(
-    model_path="neural_network/bin/models/CLASSIFICATION_1.0.0/cells.weights.h5",
-    normalization_path="neural_network/bin/models/CLASSIFICATION_1.0.0/normalization.pkl",
+    model_path="data/models/cells.weights.h5",
+    normalization_path="data/models/normalization.pkl",
     gfs_dir="data/gfs/anl",
 )
 
@@ -232,7 +233,7 @@ builder = DatasetBuilder(
     end_date=date(2024, 8, 31),
     gfs_dir="data/gfs/anl",
     flights_dir="data/flights",
-    output_dir="data/neural_network/bin/data",
+    output_dir="data/pkl",
 )
 
 # Build dataset

@@ -16,6 +16,15 @@ This is a modernized fork focusing on:
 Licensed under GPL v3 (same as original Paraglidable)
 """
 
+# Suppress TensorFlow logging BEFORE any TensorFlow imports
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['ABSL_LOG_MIN_LEVEL'] = '3'
+# Disable CUDA plugin loading to suppress "Unable to register" errors
+os.environ['TF_CUDA_PLUGGABLE_DEVICE_LIBRARY_PATH'] = ''
+os.environ['TF_GPU_ALLOCATOR'] = 'cpu'
+
 __version__ = "2.0.0"
 __author__ = "Evgeny Istomin"
 __original_author__ = "Antoine Bourgois"

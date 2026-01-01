@@ -78,13 +78,6 @@ dev = [
     "ipython>=8.12.0",
 ]
 
-jupyter = [
-    "jupyter>=1.0.0",
-    "jupyterlab>=4.0.0",
-    "matplotlib>=3.7.0",
-    "seaborn>=0.12.0",
-]
-
 # IGC parsing (optional - only if extending with IGC file support)
 igc = [
     "libigc>=1.1.0",
