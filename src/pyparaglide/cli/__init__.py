@@ -5,13 +5,17 @@ This module provides the main CLI entry point using Typer.
 """
 
 from importlib import metadata
+from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
+from tqdm import tqdm
 
 from pyparaglide import __version__
 from pyparaglide.config import get_settings
+from pyparaglide.models.enums import ModelType, ProblemFormulation
+from pyparaglide.training import Trainer
 
 # Create Typer app
 app = typer.Typer(
@@ -98,6 +102,100 @@ def info() -> None:
     table.add_row("Original Project", "Paraglidable by Antoine Bourgois")
 
     console.print(table)
+
+
+@app.command()
+def train(
+    model_type: str = typer.Option("cells", "--model", "-m", help="Model type: 'cells' or 'spots'"),
+    data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
+    models_dir: str = typer.Option(None, "--models-dir", "-o", help="Directory to save model weights"),
+    cells: str = typer.Option(None, "--cells", "-c", help="Comma-separated list of cell indices (default: all)"),
+    lr_init: float = typer.Option(0.008, "--lr-init", help="Initial learning rate"),
+    lr_end: float = typer.Option(7e-4, "--lr-end", help="Final learning rate"),
+    epochs: int = typer.Option(55, "--epochs", "-e", help="Number of training epochs"),
+    batch_size: int = typer.Option(32, "--batch-size", "-b", help="Batch size"),
+    validation: bool = typer.Option(True, "--validation/--no-validation", help="Use validation set"),
+    super_resolution: int = typer.Option(1, "--super-res", "-s", help="Super-resolution factor"),
+    load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights"),
+) -> None:
+    """
+    Train a PyParaglide model.
+
+    Example:
+        pyparaglide train --model cells --data-dir neural_network/bin/data --epochs 55
+    """
+    settings = get_settings()
+
+    # Use defaults from settings if not specified
+    if data_dir is None:
+        data_dir = str(Path(settings.gfs_dir).parent.parent / "neural_network" / "bin" / "data")
+    if models_dir is None:
+        models_dir = settings.models_dir
+
+    # Parse model type
+    try:
+        model_type_enum = ModelType[model_type.upper()]
+    except KeyError:
+        console.print(f"[red]Invalid model type: {model_type}[/red]")
+        console.print("Valid options: [cyan]cells[/cyan], [cyan]spots[/cyan]")
+        raise typer.Exit(1)
+
+    # Parse cells
+    if cells:
+        cells_list = [int(c.strip()) for c in cells.split(",")]
+    else:
+        cells_list = None  # Will use all cells
+
+    console.print(f"[bold cyan]Training {model_type_enum.name} model[/bold cyan]\n")
+
+    # Create trainer
+    trainer = Trainer(
+        data_dir=data_dir,
+        model_type=model_type_enum,
+        problem_formulation=ProblemFormulation.CLASSIFICATION,
+        models_dir=models_dir,
+    )
+
+    console.print(f"[dim]Data directory: {data_dir}[/dim]")
+    console.print(f"[dim]Models directory: {models_dir}[/dim]")
+    console.print(f"[dim]Cells: {'all' if cells_list is None else len(cells_list)}[/dim]")
+    console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
+    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
+
+    # Prepare data
+    console.print("[yellow]Preparing data...[/yellow]")
+    X, Y = trainer.prepare_data(cells=cells_list, super_resolution=super_resolution)
+
+    # Create model
+    console.print("[yellow]Creating model...[/yellow]")
+    actual_cells = cells_list if cells_list else list(range(trainer.nb_cells))
+    trainer.create_model(cells=actual_cells, super_resolution=super_resolution, load_weights=load_weights)
+
+    # Train
+    console.print("[yellow]Training...[/yellow]\n")
+    history = trainer.train(
+        X=X,
+        Y=Y,
+        lr_init=lr_init,
+        lr_end=lr_end,
+        nb_epochs=epochs,
+        batch_size=batch_size,
+        use_validation_set=validation,
+    )
+
+    # Save
+    console.print("\n[yellow]Saving model...[/yellow]")
+    trainer.save_weights()
+
+    # Results
+    final_loss = history["loss"][-1]
+    if "val_loss" in history and history["val_loss"]:
+        final_val_loss = history["val_loss"][-1]
+        console.print(f"\n[green]Training complete![/green]")
+        console.print(f"Final loss: [cyan]{final_loss:.4f}[/cyan], Val loss: [cyan]{final_val_loss:.4f}[/cyan]")
+    else:
+        console.print(f"\n[green]Training complete![/green]")
+        console.print(f"Final loss: [cyan]{final_loss:.4f}[/cyan]")
 
 
 @app.callback()
