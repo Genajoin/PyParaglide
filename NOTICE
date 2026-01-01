@@ -8,8 +8,8 @@ Original Project Information:
 Project Name:  Paraglidable
 Original Author: Antoine Bourgois
 Homepage:      https://paraglidable.com
-Repository:    https://github.com/Genajoin/Paraglidable
-License:       GNU General Public License v3.0 or later (GPL-3.0-or-later)
+Repository:    https://github.com/AntoineMeler/Paraglidable
+License:       GNU General Public License v3.0 
 
 Modified Version Information:
 -----------------------------
@@ -17,7 +17,7 @@ Project Name:  PyParaglide
 Maintainer:    Evgeny Istomin
 Email:         genajoin@gmail.com
 Repository:    https://github.com/Genajoin/PyParaglide
-License:       GNU General Public License v3.0 or later (GPL-3.0-or-later)
+License:       GNU General Public License v3.0 
 
 Modifications:
 --------------
@@ -26,7 +26,9 @@ This is a substantially modified version of Paraglidable, including:
 1. Migration from TensorFlow 1.15 to TensorFlow 2.15+
    - Updated all deprecated tf.keras.backend.* APIs to modern TensorFlow 2.x equivalents
    - Refactored custom Keras layers for TF 2.x compatibility
+   - Removed compute_output_shape() methods (automatic in TF2)
    - Updated model compilation and training code
+   - New module structure: src/pyparaglide/models/
 
 2. Python version requirement updated to Python 3.12+
    - Removed support for older Python versions
@@ -36,16 +38,27 @@ This is a substantially modified version of Paraglidable, including:
    - Removed Docker-based deployment
    - Removed Apache/PHP web server components
    - Removed C++/Qt5 tile generator
-   - Converted to CLI-first application using Typer
+   - Converted to CLI-first application using Typer + Rich
 
 4. Project structure modernization
    - Adopted src/ layout with pyproject.toml
-   - Reorganized code into logical modules
+   - Reorganized code into logical modules:
+     * models/ - Neural network architecture (7 custom layers, 2 model types)
+     * data/ - PKL data loading and normalization
+     * training/ - Training logic with callbacks
+     * config/ - Pydantic-based configuration
+     * cli/ - Command-line interface
    - Added modern Python tooling (black, ruff, mypy, pytest)
 
 5. Configuration management
    - Replaced environment detection with Pydantic Settings
-   - Unified configuration through .env files
+   - Unified configuration through .env files with PYPARAGLIDE_ prefix
+
+6. CLI commands implemented
+   - pyparaglide version - Show version and dependency info
+   - pyparaglide config - Display current configuration
+   - pyparaglide info - System information
+   - pyparaglide train - Train CELLS/SPOTS models
 
 Original Copyright Notice:
 --------------------------
