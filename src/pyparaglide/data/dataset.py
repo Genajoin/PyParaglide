@@ -63,23 +63,23 @@ class Dataset:
     Loads and prepares training data from PKL files.
     """
 
-    # Weather parameter definitions (from original GfsData)
-    METEO_PARAMS_OTHER = [
-        (6, "VVEL", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-        (6, "HGT", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-        (6, "ABSV", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-        (6, "TMP", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-        (6, "RH", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
+    # Parameter definitions
+    _DEFS_OTHER = [
+        ("Vertical velocity", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
+        ("Geopotential Height", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
+        ("Absolute vorticity", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
+        ("Temperature", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
+        ("Relative humidity", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
     ]
 
-    METEO_PARAMS_WIND = [
-        (6, "UGRD", [600, 700, 800, 900, 1000]),
-        (6, "VGRD", [600, 700, 800, 900, 1000]),
+    _DEFS_WIND = [
+        ("U component of wind", [600, 700, 800, 900, 1000]),
+        ("V component of wind", [600, 700, 800, 900, 1000]),
     ]
 
-    METEO_PARAMS_HUMIDITY = [
-        (0, "PWAT", [0]),
-        (0, "CWAT", [0]),
+    _DEFS_HUMIDITY = [
+        ("Precipitable water", [0]),
+        ("Cloud water", [0]),
     ]
 
     def __init__(self, data_dir: Path | str):
@@ -99,8 +99,74 @@ class Dataset:
         self.nb_days = len(self.meteo_days)
         self.nb_cells = len(self.sorted_cells)
 
+        # Build parameter lists
+        self._build_params_lists()
+
         # Load data matrices
         self._load_data()
+
+    def _build_params_lists(self) -> None:
+        """Build parameter lists for training (organized by hour)."""
+        hours = [6, 12, 18]
+        self.params_other = [[], [], []]
+        self.params_wind = [[], [], []]
+        self.params_humidity = [[], [], []]
+
+        for h_idx, hour in enumerate(hours):
+            # OTHER
+            for name, levels in self._DEFS_OTHER:
+                for level in levels:
+                    found = self._find_param(hour, name, level)
+                    if found:
+                        self.params_other[h_idx].append(found)
+                    else:
+                        print(f"Warning: Missing param {name} {level} at {hour}h")
+
+            # WIND
+            for name, levels in self._DEFS_WIND:
+                for level in levels:
+                    found = self._find_param(hour, name, level)
+                    if found:
+                        self.params_wind[h_idx].append(found)
+                    else:
+                         print(f"Warning: Missing param {name} {level} at {hour}h")
+
+            # HUMIDITY
+            for name, levels in self._DEFS_HUMIDITY:
+                for level in levels:
+                    found = self._find_param(hour, name, level)
+                    if found:
+                        self.params_humidity[h_idx].append(found)
+                    else:
+                         print(f"Warning: Missing param {name} {level} at {hour}h")
+
+    def _find_param(self, hour: int, name: str, level: int) -> tuple | None:
+        """Find a parameter tuple in meteo_params."""
+        for p in self.meteo_params:
+            if p[0] != hour or p[1] != name:
+                continue
+
+            # Check level
+            # p[2] structure varies:
+            # [[('isobaricInhPa', 1000)]]
+            # [('entireAtmosphere', 0), ('unknown', 0)]
+            
+            p_levels = p[2]
+            if not isinstance(p_levels, list):
+                continue
+
+            # Try to match level
+            for item in p_levels:
+                if isinstance(item, list) and len(item) > 0 and isinstance(item[0], tuple):
+                    # [[('isobaricInhPa', 1000)]] case
+                    if item[0][1] == level:
+                         return p
+                elif isinstance(item, tuple):
+                    # [('entireAtmosphere', 0), ...] case
+                    if item[1] == level:
+                        return p
+        
+        return None
 
     def _load_data(self) -> None:
         """Load all data matrices from PKL files."""

@@ -289,8 +289,8 @@ def forecast(
 
 @app.command()
 def download(
-    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
-    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Output directory for GRIB files"),
     hours: str = typer.Option("0,6,12,18", "--hours", "-H", help="UTC hours to download (comma-separated)"),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel download workers"),
@@ -300,19 +300,25 @@ def download(
     Download GFS Analysis data from NOAA.
 
     Downloads historical GFS Analysis GRIB files for specified date range.
-    Files are organized by month in the data directory.
+    If --start/--end are not specified, uses TRAINING_DATES from .env file
+    (which can contain multiple date ranges).
 
-    Example:
-        pyparaglide download --start 2021-06-01 --end 2021-08-31 --workers 4 --filter
+    Examples:
+        # Single date range
+        pyparaglide download --start 2021-06-01 --end 2021-08-31
+
+        # Use ranges from .env (TRAINING_DATES)
+        pyparaglide download
+
+        # Multiple ranges from .env with options
+        pyparaglide download --workers 4 --filter
     """
+    import datetime as dt
+
     settings = get_settings()
 
     if data_dir is None:
         data_dir = settings.gfs_dir
-
-    if start_date is None or end_date is None:
-        console.print("[red]Error: --start and --end dates are required[/red]")
-        raise typer.Exit(1)
 
     # Parse hours
     hour_list = [int(h.strip()) for h in hours.split(",")]
@@ -327,18 +333,45 @@ def download(
         filter_grib=filter,
     )
 
-    # Download
-    stats = downloader.download_range(start_date, end_date)
+    # Determine date ranges
+    if start_date and end_date:
+        # Single range from arguments
+        date_ranges = [(dt.datetime.strptime(start_date, "%Y-%m-%d").date(),
+                        dt.datetime.strptime(end_date, "%Y-%m-%d").date())]
+    else:
+        # Use ranges from settings
+        date_ranges = settings.parse_training_dates()
+        if not date_ranges:
+            console.print("[red]Error: No date ranges found. Specify --start/--end or set TRAINING_DATES in .env[/red]")
+            raise typer.Exit(1)
+
+    # Download all ranges
+    total_stats = {"downloaded": 0, "skipped": 0, "failed": 0, "total_mb": 0.0}
+
+    for start, end in date_ranges:
+        console.print(f"\n[yellow]Processing range: {start} to {end}[/yellow]")
+        stats = downloader.download_range(start, end)
+
+        for key in total_stats:
+            if key != "total_mb":
+                total_stats[key] += stats[key]
+        total_stats["total_mb"] += stats["total_mb"]
+
+    # Print summary
+    console.print(f"\n[bold]Total Summary:[/bold]")
+    console.print(f"  Downloaded: {total_stats['downloaded']} files ({total_stats['total_mb']:.1f} MB)")
+    console.print(f"  Skipped: {total_stats['skipped']} files")
+    console.print(f"  Failed: {total_stats['failed']} files")
 
     # Return exit code based on failures
-    if stats["failed"] > 0:
+    if total_stats["failed"] > 0:
         raise typer.Exit(1)
 
 
 @app.command()
 def build_dataset(
-    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
-    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD). If not specified, uses TRAINING_DATES from .env"),
     gfs_dir: str = typer.Option(None, "--gfs-dir", help="Directory containing GFS GRIB files"),
     flights_dir: str = typer.Option(None, "--flights-dir", help="Directory with xContest JSON files"),
     output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for PKL files"),
@@ -352,9 +385,18 @@ def build_dataset(
     Creates the PKL files needed for neural network training.
     For full functionality, use scripts/build_dataset.py directly.
 
-    Example:
+    If --start/--end are not specified, uses TRAINING_DATES from .env file
+    (which can contain multiple date ranges).
+
+    Examples:
+        # Single date range
         pyparaglide build-dataset --start 2021-06-01 --end 2021-08-31
+
+        # Use ranges from .env (TRAINING_DATES)
+        pyparaglide build-dataset
     """
+    import datetime as dt
+
     settings = get_settings()
 
     if gfs_dir is None:
@@ -366,11 +408,20 @@ def build_dataset(
     if bbox is None:
         bbox = settings.bbox
 
-    if start_date is None or end_date is None:
-        console.print("[red]Error: --start and --end dates are required[/red]")
-        raise typer.Exit(1)
+    # Determine date ranges
+    if start_date and end_date:
+        # Single range from arguments
+        date_ranges = [(dt.datetime.strptime(start_date, "%Y-%m-%d").date(),
+                        dt.datetime.strptime(end_date, "%Y-%m-%d").date())]
+    else:
+        # Use ranges from settings
+        date_ranges = settings.parse_training_dates()
+        if not date_ranges:
+            console.print("[red]Error: No date ranges found. Specify --start/--end or set TRAINING_DATES in .env[/red]")
+            raise typer.Exit(1)
 
-    console.print(f"[bold cyan]Building PKL dataset[/bold cyan]\n")
+    console.print(f"[bold cyan]Building PKL dataset[/bold cyan]")
+    console.print(f"[dim]Date ranges: {len(date_ranges)}[/dim]\n")
 
     # Create builder
     builder = DatasetBuilder(
@@ -380,13 +431,26 @@ def build_dataset(
         bbox=tuple(float(x) for x in bbox.split(",")),
     )
 
-    # Build dataset
-    stats = builder.build(
-        start_date=start_date,
-        end_date=end_date,
-        min_flights_per_spot=min_flights,
-        include_flights=not no_flights,
-    )
+    # Build dataset for each range
+    total_stats = {"cells": 0, "spots": 0, "days": 0}
+
+    for start, end in date_ranges:
+        console.print(f"\n[yellow]Processing range: {start} to {end}[/yellow]")
+        stats = builder.build(
+            start_date=start,
+            end_date=end,
+            min_flights_per_spot=min_flights,
+            include_flights=not no_flights,
+        )
+
+        total_stats["cells"] = max(total_stats["cells"], stats.get("cells", 0))
+        total_stats["spots"] = max(total_stats["spots"], stats.get("spots", 0))
+        total_stats["days"] += stats.get("days", 0)
+
+    console.print(f"\n[bold]Total Summary:[/bold]")
+    console.print(f"  Cells: {total_stats['cells']}")
+    console.print(f"  Spots: {total_stats['spots']}")
+    console.print(f"  Days: {total_stats['days']}")
 
     console.print(f"\n[green]Dataset build complete![/green]")
 
