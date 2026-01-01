@@ -1,84 +1,259 @@
-<img src="www/imgs/logo/logo.svg" width="80" align="right" />
+# PyParaglide
 
-# Paraglidable
+<div align="center">
 
-Paraglidable is an A.I.-based flying conditions forecasting program for paragliding.<br/>
-You can find it live here: https://paraglidable.com
+![PyParaglide Logo](www/imgs/logo/logo.svg" width="100")
 
-This repository contains:
-* Scripts for setting and training the neural network, downloading +10 days forecasts data from third parties and running a prediction in `/neural_network/`
-* Program for generating the map tiles from a prediction in `/tiler/`
-* Complete web site in `/www/`
+**AI-based paragliding flyability forecasting with TensorFlow 2.x**
 
-## Requirements
+[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![TensorFlow 2.15+](https://img.shields.io/badge/tensorflow-2.15+-orange.svg)](https://www.tensorflow.org/)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Tests](https://img.shields.io/badge/tests-43%20passing-green.svg)](tests/)
 
-The easiest way to start playing with Paraglidable is to use [Docker](https://www.docker.com). I will only provide support for this workflow. But you can also check the [Dockerfile](docker/Dockerfile) and install dependencies on your own.
+**Live Site:** https://paraglidable.com
 
-The main dependencies are:
-* [Python 3](https://www.python.org/)
-* [TensorFlow 2](https://www.tensorflow.org/)
-* [Qt 5](https://www.qt.io/)
-* [Apache HTTP Server](https://httpd.apache.org/) with [PHP](https://www.php.net/)
+</div>
+
+---
+
+## Overview
+
+PyParaglide is a modernized fork of [Paraglidable](https://github.com/Genajoin/Paraglidable) — an AI-powered forecasting system that predicts paragliding flying conditions based on weather data.
+
+### Key Features
+
+- **Neural Network Forecasts** — Uses TensorFlow 2.x to predict flyability for 1°×1° grid cells
+- **Multiple Outputs** — Predicts overall flyability, cross-country potential, wind-based and rain-based indicators
+- **5 Altitude Levels** — Separate predictions for 600hPa, 700hPa, 800hPa, 900hPa, 1000hPa
+- **GFS Weather Data** — Uses NOAA GFS Analysis/Forecast data
+- **CLI-First Design** — Modern command-line interface with Typer + Rich
+
+### What's New in PyParaglide
+
+- ✅ **TensorFlow 2.15+** — Migrated from TF 1.15
+- ✅ **Python 3.12+** — Modern Python with type hints
+- ✅ **No Docker Required** — Direct installation via pip
+- ✅ **No C++ Tiler** — Pure Python implementation
+- ✅ **pyproject.toml** — Standard Python packaging
+- ✅ **Unit Tests** — 43 tests with pytest
+- ✅ **GPL v3** — Open source license
 
 ## Installation
 
-### Docker Compose (Recommended)
+### Requirements
+
+- Python 3.12 or higher
+- TensorFlow 2.15+ (automatically installed)
+- ~1GB free disk space for training data
+
+### Install from PyPI (Future)
 
 ```bash
-git clone https://github.com/Genajoin/Paraglidable.git
-cd Paraglidable
+pip install pyparaglide
+```
 
-# Configure environment (optional - edit .env for custom paths/bbox)
+### Install from Source
+
+```bash
+git clone https://github.com/Genajoin/PyParaglide.git
+cd PyParaglide
+pip install -e .
+```
+
+### Development Installation
+
+```bash
+git clone https://github.com/Genajoin/PyParaglide.git
+cd PyParaglide
+pip install -e ".[dev,jupyter]"
+```
+
+## Quick Start
+
+### 1. Configure Environment
+
+```bash
 cp .env.example .env
-
-# Start container
-docker compose up -d
+# Edit .env to set your training dates, bbox, and data directories
 ```
 
-**Access:**
-- Web interface: http://localhost:8001
-- Jupyter: http://localhost:8888 (after running `sh scripts/start_jupyter.sh` inside container)
+### 2. Download Training Data
 
-**One-time setup inside container:**
 ```bash
-docker exec -it paraglidable bash
-
-cd /workspaces/Paraglidable/scripts/
-python download_data.py             # Download training data (200MB)
-python download_elevation_tiles.py  # Download elevation data (260MB)
-python download_background_tiles.py # Download background tiles (optional) (180MB)
-sh build_tiler.sh                   # Build the C++ tiler
+pyparaglide download --start-date 2024-06-01 --end-date 2024-08-31
 ```
 
-## Usage
+### 3. Build Dataset
 
-**Generate forecast:**
 ```bash
-cd /workspaces/Paraglidable/neural_network/
-python forecast.py  # Downloads GFS, runs ML prediction, generates tiles
+pyparaglide build-dataset
 ```
 
-**Training:**
+### 4. Train Model
+
 ```bash
-cd /workspaces/Paraglidable/neural_network/
-python train.py
+pyparaglide train --cells 10 --epochs 55
 ```
 
-**Start web server:**
+### 5. Generate Forecast
+
 ```bash
-sh /workspaces/Paraglidable/scripts/start_server.sh  # Visualize on localhost:8001
+pyparaglide forecast
 ```
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `pyparaglide version` | Show version information |
+| `pyparaglide config` | Show current configuration |
+| `pyparaglide info` | Show system information |
+| `pyparaglide download` | Download GFS weather data |
+| `pyparaglide build-dataset` | Build PKL dataset from GRIB + flights |
+| `pyparaglide train` | Train neural network model |
+| `pyparaglide forecast` | Generate flyability forecast |
+
+### Example: Training
+
+```bash
+# Train with 10 cells for 55 epochs
+pyparaglide train --cells 10 --epochs 55 --batch-size 32
+
+# Train with specific learning rate
+pyparaglide train --cells 5 --lr-init 0.01 --lr-end 0.001
+
+# Train without validation
+pyparaglide train --cells 10 --no-validation
+```
+
+### Example: Forecast
+
+```bash
+# Generate 10-day forecast (default)
+pyparaglide forecast
+
+# Generate with custom output directory
+pyparaglide forecast --output-dir /path/to/output
+
+# Show debug information
+pyparaglide forecast --verbose
+```
+
+## Configuration
+
+PyParaglide uses environment variables with the `PYPARAGLIDE_` prefix:
+
+```bash
+# Training configuration
+PYPARAGLIDE_TRAINING_DATES=2024-06-01:2024-08-31,2025-06-01:2025-08-31
+PYPARAGLIDE_BBOX=45,47,13,15  # lat_min,lat_max,lon_min,lon_max
+
+# Data directories
+PYPARAGLIDE_GFS_DIR=data/gfs/anl
+PYPARAGLIDE_FLIGHTS_DIR=data/flights
+PYPARAGLIDE_MODELS_DIR=neural_network/bin/models/CLASSIFICATION_1.0.0
+PYPARAGLIDE_OUTPUT_DIR=output/forecasts
+
+# Processing
+PYPARAGLIDE_MIN_FLIGHTS_PER_SPOT=200
+PYPARAGLIDE_SPOT_CLUSTER_DISTANCE_KM=15.0
+```
+
+## Project Structure
+
+```
+PyParaglide/
+├── src/pyparaglide/
+│   ├── __init__.py
+│   ├── cli.py              # Main CLI entry point
+│   ├── config/             # Configuration (Settings)
+│   ├── data/               # Dataset loading and normalization
+│   ├── downloads/          # GFS data downloader
+│   ├── inference/          # GRIB reader, forecast generation
+│   ├── models/             # Neural network models
+│   ├── preprocessing/      # Dataset building
+│   └── training/           # Training logic
+├── tests/                  # Unit tests (43 tests)
+├── scripts/                # Legacy scripts (for reference)
+├── neural_network/         # Original TF1 code (deprecated)
+└── www/                    # Web interface (static files)
+```
+
+## Model Architecture
+
+PyParaglide uses a custom neural network with:
+
+1. **Wind Processing Block** — Adjusts wind for mountainous terrain
+2. **Flyability Block** — Combines wind, weather, and humidity data
+3. **Crossability Block** — Predicts cross-country potential
+4. **Population Block** — Models pilot behavior and probability
+5. **Separate Indicators** — Wind-flyability and humidity-flyability
+
+### Outputs (per altitude level)
+
+| Output | Description |
+|--------|-------------|
+| `flown` | Overall flight probability |
+| `flown fufu` | Cross-country potential |
+| `flown of wind` | Wind-based flyability |
+| `flown of rain` | Humidity/rain-based flyability |
+
+## Development
+
+### Running Tests
+
+```bash
+pytest tests/ -v
+```
+
+### Code Formatting
+
+```bash
+ruff check src/
+ruff format src/
+black src/
+```
+
+### Type Checking
+
+```bash
+mypy src/
+```
+
+## Migration from Original Paraglidable
+
+| Original | PyParaglide |
+|----------|-------------|
+| TensorFlow 1.15 | TensorFlow 2.15+ |
+| Python 3.6 | Python 3.12+ |
+| Docker required | pip install |
+| C++ tiler | Pure Python |
+| Custom training scripts | Unified CLI |
+| `scripts/train.py` | `pyparaglide train` |
+| `neural_network/forecast.py` | `pyparaglide forecast` |
 
 ## Documentation
 
-- **[Deployment Guide](specs/DEPLOYMENT.md)** — Complete Docker deployment and data preparation
-- **[Training Process](specs/TRAINING_PROCESS.md)** — Neural network training workflow
-- **[Neural Network](neural_network/)** — Architecture and API documentation
+- **[Architecture](docs/ARCHITECTURE.md)** — Detailed model architecture
+- **[API Reference](docs/API.md)** — Complete API documentation
+- **[Training Guide](docs/TRAINING.md)** — How to train models
+- **[Contributing](CONTRIBUTING.md)** — Contribution guidelines
 
-## Contributing
+## Acknowledgments
 
-Contributions on any subject are welcome by doing a [pull request from a fork](https://help.github.com/en/github/collaborating-with-issues-and-pull-requests/creating-a-pull-request-from-a-fork)!
+- **Original Paraglidable** by Antoine de Mandre — https://github.com/Genajoin/Paraglidable
+- **GFS Data** — NOAA/NCEP GFS model
+- **xContest** — Paragliding flight data
 
 ## License
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+This project is licensed under GPL v3. The original Paraglidable project was also GPL v3.
+
+---
+
+<div align="center">
+
+**[Live Site](https://paraglidable.com)** • **[Original Project](https://github.com/Genajoin/Paraglidable)** • **[Issues](https://github.com/Genajoin/PyParaglide/issues)**
+
+</div>
