@@ -14,8 +14,10 @@ from tqdm import tqdm
 
 from pyparaglide import __version__
 from pyparaglide.config import get_settings
+from pyparaglide.downloads import GFSDownloader
 from pyparaglide.inference import Forecaster
 from pyparaglide.models.enums import ModelType, ProblemFormulation
+from pyparaglide.preprocessing import DatasetBuilder
 from pyparaglide.training import Trainer
 
 # Create Typer app
@@ -283,6 +285,110 @@ def forecast(
 
     console.print(f"\n[green]Forecast complete![/green]")
     console.print(f"Output: [cyan]{output_path}[/cyan]")
+
+
+@app.command()
+def download(
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+    data_dir: str = typer.Option(None, "--data-dir", "-d", help="Output directory for GRIB files"),
+    hours: str = typer.Option("0,6,12,18", "--hours", "-H", help="UTC hours to download (comma-separated)"),
+    workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel download workers"),
+    filter: bool = typer.Option(False, "--filter", help="Filter GRIB files to reduce size by ~50%"),
+) -> None:
+    """
+    Download GFS Analysis data from NOAA.
+
+    Downloads historical GFS Analysis GRIB files for specified date range.
+    Files are organized by month in the data directory.
+
+    Example:
+        pyparaglide download --start 2021-06-01 --end 2021-08-31 --workers 4 --filter
+    """
+    settings = get_settings()
+
+    if data_dir is None:
+        data_dir = settings.gfs_dir
+
+    if start_date is None or end_date is None:
+        console.print("[red]Error: --start and --end dates are required[/red]")
+        raise typer.Exit(1)
+
+    # Parse hours
+    hour_list = [int(h.strip()) for h in hours.split(",")]
+
+    console.print(f"[bold cyan]Downloading GFS Analysis data[/bold cyan]\n")
+
+    # Create downloader
+    downloader = GFSDownloader(
+        data_dir=data_dir,
+        hours=hour_list,
+        workers=workers,
+        filter_grib=filter,
+    )
+
+    # Download
+    stats = downloader.download_range(start_date, end_date)
+
+    # Return exit code based on failures
+    if stats["failed"] > 0:
+        raise typer.Exit(1)
+
+
+@app.command()
+def build_dataset(
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+    gfs_dir: str = typer.Option(None, "--gfs-dir", help="Directory containing GFS GRIB files"),
+    flights_dir: str = typer.Option(None, "--flights-dir", help="Directory with xContest JSON files"),
+    output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for PKL files"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+    min_flights: int = typer.Option(200, "--min-flights", help="Minimum flights per spot"),
+    no_flights: bool = typer.Option(False, "--no-flights", help="Skip flight data processing"),
+) -> None:
+    """
+    Build PKL dataset from GFS GRIB files and flight data.
+
+    Creates the PKL files needed for neural network training.
+    For full functionality, use scripts/build_dataset.py directly.
+
+    Example:
+        pyparaglide build-dataset --start 2021-06-01 --end 2021-08-31
+    """
+    settings = get_settings()
+
+    if gfs_dir is None:
+        gfs_dir = settings.gfs_dir
+    if flights_dir is None:
+        flights_dir = settings.flights_dir
+    if output_dir is None:
+        output_dir = str(Path(gfs_dir).parent.parent / "neural_network" / "bin" / "data")
+    if bbox is None:
+        bbox = settings.bbox
+
+    if start_date is None or end_date is None:
+        console.print("[red]Error: --start and --end dates are required[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Building PKL dataset[/bold cyan]\n")
+
+    # Create builder
+    builder = DatasetBuilder(
+        gfs_dir=gfs_dir,
+        flights_dir=flights_dir,
+        output_dir=output_dir,
+        bbox=tuple(float(x) for x in bbox.split(",")),
+    )
+
+    # Build dataset
+    stats = builder.build(
+        start_date=start_date,
+        end_date=end_date,
+        min_flights_per_spot=min_flights,
+        include_flights=not no_flights,
+    )
+
+    console.print(f"\n[green]Dataset build complete![/green]")
 
 
 @app.callback()
