@@ -48,90 +48,96 @@ class GribReader:
             grib_path: Path to GRIB2 file
         """
         self.grib_path = Path(grib_path)
+        self._grb_index: pygrib.index | None = None
         self._messages: list[pygrib.gribmessage] | None = None
+        self._lats: np.ndarray | None = None
+        self._lons: np.ndarray | None = None
 
-    def _load(self) -> list[pygrib.gribmessage]:
-        """Load GRIB file messages."""
+    def _load_index(self) -> pygrib.index:
+        """Load or create GRIB index for fast parameter selection."""
+        if self._grb_index is None:
+            self._grb_index = pygrib.index(str(self.grib_path), "name", "typeOfLevel", "level")
+        return self._grb_index
+
+    def _load_messages(self) -> list[pygrib.gribmessage]:
+        """Load all GRIB messages."""
         if self._messages is None:
-            self._messages = pygrib.open(str(self.grib_path)).read()
+            grb = pygrib.open(str(self.grib_path))
+            self._messages = grb.read()
+            # Get grid info from first message
+            if self._messages:
+                _, self._lats, self._lons = self._messages[0].data()
         return self._messages
 
-    def get_param(self, name: str, level: int | None = None) -> np.ndarray | None:
+    def get_param(self, name: str, level: int | None = None, type_of_level: str = "isobaricInhPa") -> np.ndarray | None:
         """
         Extract a parameter from the GRIB file.
 
         Args:
-            name: Parameter name (e.g., 't', 'u', 'v', 'r', 'h', 'pwat')
+            name: Parameter name (e.g., 'Temperature', 'U component of wind')
             level: Pressure level in hPa (None for surface/whole-atmosphere params)
+            type_of_level: Type of level ('isobaricInhPa' for pressure levels)
 
         Returns:
             2D numpy array of values, or None if not found
         """
-        messages = self._load()
-
-        # Find matching messages
-        for msg in messages:
-            # Match parameter name
-            param_name = msg.getParameterName(False).lower()
-            if param_name != name.lower():
-                continue
-
-            # Match level (if specified)
+        try:
+            idx = self._load_index()
             if level is not None:
-                msg_level = msg.getLevel()
-                if msg_level != level:
-                    continue
-
-            # Get data
-            data, lats, lons = msg.data()
-
-            # Handle missing values
-            if hasattr(msg, "missing"):
-                data = np.ma.filled(data, fill_value=0)
-
-            return data
-
+                selected = idx.select(name=name, typeOfLevel=type_of_level, level=level)
+            else:
+                selected = idx.select(name=name)
+            if len(selected) > 0:
+                return selected[0].values
+        except Exception:
+            pass
         return None
 
     def get_bbox_data(
-        self, name: str, bbox: tuple[float, float, float, float], level: int | None = None
+        self, name: str, bbox: tuple[float, float, float, float], level: int | None = None, type_of_level: str = "isobaricInhPa"
     ) -> np.ndarray | None:
         """
         Extract parameter data for a bounding box.
 
         Args:
-            name: Parameter name
+            name: Parameter name (e.g., 'Temperature', 'U component of wind')
             bbox: (lat_min, lat_max, lon_min, lon_max)
             level: Pressure level in hPa
+            type_of_level: Type of level ('isobaricInhPa' for pressure levels)
 
         Returns:
             2D numpy array cropped to bbox
         """
-        data = self.get_param(name, level)
+        # Get lat/lon grid
+        self._load_messages()
+        if self._lats is None or self._lons is None:
+            return None
+
+        # Get full data
+        data = self.get_param(name, level, type_of_level)
         if data is None:
             return None
 
-        # Get lat/lon grid from any message
-        messages = self._load()
-        if len(messages) > 0:
-            _, lats, lons = messages[0].data()
+        # Find indices for bbox
+        lat_min, lat_max, lon_min, lon_max = bbox
 
-            # Find indices for bbox
-            lat_min, lat_max, lon_min, lon_max = bbox
+        # Handle longitude wrapping
+        if lon_min < 0:
+            lon_min += 360
+        if lon_max < 0:
+            lon_max += 360
 
-            # Handle longitude wrapping
-            if lon_min < 0:
-                lon_min += 360
-            if lon_max < 0:
-                lon_max += 360
+        lat_mask = (self._lats >= lat_min) & (self._lats <= lat_max)
+        lon_mask = (self._lons >= lon_min) & (self._lons <= lon_max)
 
-            lat_mask = (lats >= lat_min) & (lats <= lat_max)
-            lon_mask = (lons >= lon_min) & (lons <= lon_max)
+        # Apply mask
+        lat_indices = np.where(lat_mask)[0]
+        lon_indices = np.where(lon_mask)[0]
 
-            # Apply mask (this is simplified - real implementation needs proper grid slicing)
-            return data[lat_mask, :][:, lon_mask] if lon_mask.any() else data[lat_mask, :]
+        if len(lat_indices) == 0 or len(lon_indices) == 0:
+            return None
 
-        return data
+        return data[np.ix_(lat_indices, lon_indices)]
 
     @staticmethod
     def wind_to_directions(u: np.ndarray, v: np.ndarray, nb_directions: int = 8) -> np.ndarray:
