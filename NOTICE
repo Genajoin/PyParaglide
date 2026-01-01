@@ -68,6 +68,13 @@ This is a substantially modified version of Paraglidable, including:
    - JSON output format (no C++ tiler dependency)
    - Direct spot forecasts instead of map tiles
 
+8. Data management
+   - Downloads module: GFSDownloader for fetching GFS data from NOAA
+   - Preprocessing module: DatasetBuilder for creating training PKL files
+   - CLI commands: download, build-dataset
+   - Parallel downloads with resume support
+   - GRIB filtering to reduce storage needs
+
 Original Copyright Notice:
 --------------------------
 Copyright (C) Antoine Bourgois
