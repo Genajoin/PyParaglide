@@ -1,0 +1,72 @@
+PyParaglide - AI-based Paragliding Flyability Forecasting
+===========================================================
+
+This software is based on Paraglidable by Antoine Bourgois.
+
+Original Project Information:
+-----------------------------
+Project Name:  Paraglidable
+Original Author: Antoine Bourgois
+Homepage:      https://paraglidable.com
+Repository:    https://github.com/Genajoin/Paraglidable
+License:       GNU General Public License v3.0 or later (GPL-3.0-or-later)
+
+Modified Version Information:
+-----------------------------
+Project Name:  PyParaglide
+Maintainer:    Evgeny Istomin
+Email:         genajoin@gmail.com
+Repository:    https://github.com/Genajoin/PyParaglide
+License:       GNU General Public License v3.0 or later (GPL-3.0-or-later)
+
+Modifications:
+--------------
+This is a substantially modified version of Paraglidable, including:
+
+1. Migration from TensorFlow 1.15 to TensorFlow 2.15+
+   - Updated all deprecated tf.keras.backend.* APIs to modern TensorFlow 2.x equivalents
+   - Refactored custom Keras layers for TF 2.x compatibility
+   - Updated model compilation and training code
+
+2. Python version requirement updated to Python 3.12+
+   - Removed support for older Python versions
+   - Updated all dependencies to modern versions
+
+3. Architecture simplification
+   - Removed Docker-based deployment
+   - Removed Apache/PHP web server components
+   - Removed C++/Qt5 tile generator
+   - Converted to CLI-first application using Typer
+
+4. Project structure modernization
+   - Adopted src/ layout with pyproject.toml
+   - Reorganized code into logical modules
+   - Added modern Python tooling (black, ruff, mypy, pytest)
+
+5. Configuration management
+   - Replaced environment detection with Pydantic Settings
+   - Unified configuration through .env files
+
+Original Copyright Notice:
+--------------------------
+Copyright (C) Antoine Bourgois
+Licensed under GPL-3.0-or-later
+
+Modified Work Copyright Notice:
+-------------------------------
+Copyright (C) 2025 Evgeny Istomin
+Based on Paraglidable by Antoine Bourgois
+Licensed under GPL-3.0-or-later
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.

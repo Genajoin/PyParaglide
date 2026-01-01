@@ -1,27 +1,119 @@
-*.o
-*.elev
-www/data/
-data/igc/*
+# ============================================================================
+# Python
+# ============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# ============================================================================
+# Data Files (large/generated)
+# ============================================================================
 data/gfs/
+data/flights/*.json
+data/flights/merged/
+data/models/
+data/elevation/
+output/
+
+# Legacy data paths
+neural_network/bin/data/
+neural_network/bin/data_test/
+neural_network/bin/models/CLASSIFICATION_2.0.0/
+neural_network/tmp_*
+
+# Dataset metadata
+dataset_config.json
+
+# ============================================================================
+# Environment & Configuration
+# ============================================================================
+.env
+.env.local
+*.session.sql
+
+# ============================================================================
+# IDE & Editors
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============================================================================
+# Legacy/Archive (to be removed)
+# ============================================================================
+# Old web/docker/tiler paths (archived but keep in gitignore)
+www/data/
 tiler/_cache/
 tiler/Tiler/.qmake.stash
 tiler/Tiler/Makefile
 tiler/Tiler/Tiler
-.DS_Store
-__pycache__
-neural_network/bin/data
-neural_network/bin/data_test/
-neural_network/bin/models/TEST_*/
-neural_network/test_train.py
+*.o
+*.elev
+
+# Old script paths
 scripts/xc_score/tracks/
-scripts/xc_score/__pycache__/
-CLAUDE.md
-.vscode/*
-paraglidable.session.sql
-.env
-neural_network/bin/models/CLASSIFICATION_2.0.0/*
-neural_network/tmp_*
 scripts/neural_network
 scripts/data
-data/flights/*.json
-data/flights/merged
+
+# ============================================================================
+# Project-specific
+# ============================================================================
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Log files
+*.log
+training_run.log
+
+# Temporary files
+tmp/
+temp/
