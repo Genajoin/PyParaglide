@@ -72,9 +72,9 @@ class Trainer:
             cells = list(range(self.nb_cells))
 
         # Load weather data
-        X_other = [self.dataset.get_meteo_matrix(cells, Dataset.METEO_PARAMS_OTHER[h]) for h in range(3)]
-        X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(cells, Dataset.METEO_PARAMS_WIND[h])) for h in range(3)]
-        X_humidity = [self.dataset.get_meteo_matrix(cells, Dataset.METEO_PARAMS_HUMIDITY[h]) for h in range(3)]
+        X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
+        X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h])) for h in range(3)]
+        X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
 
         # Compute and save normalization (based on hour 1 = 12h)
         norm_mean_other, norm_std_other = compute_normalization_coeffs(X_other[1])
@@ -164,7 +164,15 @@ class Trainer:
     def _prepare_outputs(self, cells: list[int], super_resolution: int) -> list:
         """Prepare output tensors for model."""
         if self.model_type == ModelType.CELLS:
-            return self.dataset.get_flights_by_altitude(cells, self.nb_altitudes, super_resolution, self.problem_formulation == ProblemFormulation.REGRESSION)
+            # Get data with shape (len(cells) * super_resolution^2 * nb_days, nb_altitudes)
+            outputs = self.dataset.get_flights_by_altitude(
+                cells, self.nb_altitudes, super_resolution, self.problem_formulation == ProblemFormulation.REGRESSION
+            )
+            # Reshape each output to (nb_days, len(cells) * super_resolution^2, nb_altitudes)
+            return [
+                out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, self.nb_altitudes))
+                for out in outputs
+            ]
         else:
             # SPOTS model
             spots_data = self.dataset.get_flights_by_spots(cells)

@@ -139,18 +139,41 @@ class ModelCells:
 
         wind_block = WindBlockCells(name="wind_block_cells")
         flyability_block = FlyabilityBlock(other_dim, humidity_dim, name="flyability_block")
-        population_block = PopulationBlock(
-            problem_formulation,
-            var_date_factor,
-            var_dow_factor,
-            super_resolution,
-            name="population_block",
-        )
         crossability_block = CrossabilityBlock(
             other_dim, humidity_dim, nb_altitudes, nb_cells, name="crossability_block"
         )
         wind_flyability_block = WindFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
         humidity_flyability_block = HumidityFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
+
+        # Create separate population blocks for each output (like SPOTS model)
+        population_block_flown = PopulationBlock(
+            problem_formulation,
+            var_date_factor,
+            var_dow_factor,
+            super_resolution,
+            name="population_block_flown",
+        )
+        population_block_crossed = PopulationBlock(
+            problem_formulation,
+            var_date_factor,
+            var_dow_factor,
+            super_resolution,
+            name="population_block_crossed",
+        )
+        population_block_wind = PopulationBlock(
+            problem_formulation,
+            var_date_factor,
+            var_dow_factor,
+            super_resolution,
+            name="population_block_wind",
+        )
+        population_block_humidity = PopulationBlock(
+            problem_formulation,
+            var_date_factor,
+            var_dow_factor,
+            super_resolution,
+            name="population_block_humidity",
+        )
 
         # ==============================================================================
         # Flyability/crossability computation
@@ -172,13 +195,13 @@ class ModelCells:
         humidity_flyability_prediction = humidity_flyability_block(input_humidity)
 
         # ==============================================================================
-        # Apply population
+        # Apply population (separate blocks for each output)
         # ==============================================================================
 
-        flown_prediction = population_block([flyability_prediction, input_date, input_dow])
-        crossed_prediction = population_block([crossability_prediction, input_date, input_dow])
-        wind_flown_prediction = population_block([wind_flyability_prediction, input_date, input_dow])
-        humidity_flown_prediction = population_block(
+        flown_prediction = population_block_flown([flyability_prediction, input_date, input_dow])
+        crossed_prediction = population_block_crossed([crossability_prediction, input_date, input_dow])
+        wind_flown_prediction = population_block_wind([wind_flyability_prediction, input_date, input_dow])
+        humidity_flown_prediction = population_block_humidity(
             [humidity_flyability_prediction, input_date, input_dow]
         )
 

@@ -216,8 +216,8 @@ class Dataset:
         return X
 
     def get_date(self) -> np.ndarray:
-        """Get normalized date values (0 to 1)."""
-        return np.arange(self.nb_days, dtype=np.float32) / (self.nb_days - 1)
+        """Get normalized date values (0 to 1) with shape (nb_days, 1)."""
+        return (np.arange(self.nb_days, dtype=np.float32) / (self.nb_days - 1)).reshape(-1, 1)
 
     def get_flights_by_altitude(
         self, cells: list[int], nb_altitudes: int, super_resolution: int, regression: bool

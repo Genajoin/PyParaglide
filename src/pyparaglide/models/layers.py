@@ -228,8 +228,8 @@ class WindBlockCells(tf.keras.layers.Layer):
         """
         mountainess, wind = inputs
 
-        # Expand mountainess to match wind dimensions
-        mountainess_expanded = tf.tile(tf.expand_dims(mountainess, -1), (1, 1, 1, tf.shape(wind)[-1]))
+        # Expand mountainess to match wind dimensions (nbHours)
+        mountainess_expanded = tf.tile(tf.expand_dims(mountainess, -1), (1, 1, 1, tf.shape(wind)[-2]))
 
         # Sum wind over wind direction dimension
         wind_norm = tf.reduce_sum(wind, axis=-1)
@@ -412,10 +412,13 @@ class PopulationBlock(tf.keras.layers.Layer):
         tiled_popu = tf.tile(popu_reshaped, (tf.shape(prediction)[0], 1, 1))
 
         # Compute day factor (seasonality * day of week)
-        day_factor_vector = (1.0 + self.var_date_factor * date) * tf.einsum("bi,ij->b", dow, self.var_dow_factor)
-        day_factor_vector = tf.reshape(day_factor_vector, (tf.shape(day_factor_vector)[0], 1, 1))
+        # Use batch_dot like original: dow (batch, 7) x dow_factor (7, 1) -> (batch, 1)
+        dow_factor_reshaped = tf.reshape(self.var_dow_factor, (-1, 1))  # (7, 1)
+        dow_factor_dot = tf.matmul(dow, dow_factor_reshaped)  # (batch, 1)
+        day_factor_scalar = (1.0 + self.var_date_factor * date) * dow_factor_dot  # (batch, 1)
+        day_factor_vector = tf.reshape(day_factor_scalar, (-1, 1, 1))  # (batch, 1, 1)
         day_factor_vector = tf.tile(
-            day_factor_vector, (1, tf.shape(tiled_popu)[1], tf.shape(tiled_popu)[2])
+            day_factor_vector, (tf.shape(tiled_popu)[0], tf.shape(tiled_popu)[1], tf.shape(tiled_popu)[2])
         )  # (batch, nbCells*super_resolution^2, nbAlts)
         tiled_popu = day_factor_vector * tiled_popu
 
