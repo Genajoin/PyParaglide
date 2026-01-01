@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from pyparaglide import __version__
 from pyparaglide.config import get_settings
+from pyparaglide.inference import Forecaster
 from pyparaglide.models.enums import ModelType, ProblemFormulation
 from pyparaglide.training import Trainer
 
@@ -196,6 +197,92 @@ def train(
     else:
         console.print(f"\n[green]Training complete![/green]")
         console.print(f"Final loss: [cyan]{final_loss:.4f}[/cyan]")
+
+
+@app.command()
+def forecast(
+    date: str = typer.Option(None, "--date", "-d", help="Target date (YYYY-MM-DD, default: today)"),
+    model_type: str = typer.Option("cells", "--model", "-m", help="Model type: 'cells' or 'spots'"),
+    models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
+    grib_dir: str = typer.Option(None, "--grib-dir", "-g", help="Directory containing GRIB files"),
+    output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for forecasts"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+) -> None:
+    """
+    Generate paragliding flyability forecast.
+
+    Requires trained model weights and GFS GRIB files for the target date.
+
+    Example:
+        pyparaglide forecast --date 2025-06-15 --grib-dir data/gfs/2025-06-15
+    """
+    import datetime as dt
+
+    settings = get_settings()
+
+    # Use defaults from settings if not specified
+    if models_dir is None:
+        models_dir = settings.models_dir
+    if grib_dir is None:
+        grib_dir = str(Path(settings.gfs_dir) / "forecasts")
+    if output_dir is None:
+        output_dir = settings.output_dir
+    if bbox is None:
+        bbox = settings.bbox
+
+    # Parse date
+    if date is None:
+        target_date = dt.date.today()
+    else:
+        try:
+            target_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            console.print(f"[red]Invalid date format: {date}[/red]")
+            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+            raise typer.Exit(1)
+
+    # Parse model type
+    try:
+        model_type_enum = ModelType[model_type.upper()]
+    except KeyError:
+        console.print(f"[red]Invalid model type: {model_type}[/red]")
+        console.print("Valid options: [cyan]cells[/cyan], [cyan]spots[/cyan]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Generating {model_type_enum.name} forecast[/bold cyan]")
+    console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
+    console.print(f"[dim]Models: {models_dir}[/dim]")
+    console.print(f"[dim]GRIB: {grib_dir}[/dim]\n")
+
+    # Find GRIB files for the target date
+    grib_path = Path(grib_dir)
+    grib_files = []
+    for hour in [6, 12, 18]:
+        grib_file = grib_path / f"{target_date.strftime('%Y%m%d')}-{hour:02d}.grib2"
+        if grib_file.exists():
+            grib_files.append(grib_file)
+        else:
+            console.print(f"[yellow]Warning: GRIB file not found: {grib_file}[/yellow]")
+
+    if len(grib_files) < 3:
+        console.print(f"[red]Error: Found only {len(grib_files)}/3 GRIB files[/red]")
+        console.print("Expected files for 06h, 12h, 18h forecasts")
+        raise typer.Exit(1)
+
+    # Create forecaster and generate prediction
+    console.print("[yellow]Loading model...[/yellow]")
+    forecaster = Forecaster(models_dir, model_type_enum)
+
+    console.print("[yellow]Running prediction...[/yellow]")
+    results = forecaster.predict_day(grib_files, target_date, tuple(float(x) for x in bbox.split(",")))
+
+    # Save results
+    output_path = Path(output_dir) / f"{target_date.isoformat()}_{model_type_enum.name.lower()}_forecast.json"
+    console.print("[yellow]Saving results...[/yellow]")
+    forecaster.save_forecast(results, output_path)
+
+    console.print(f"\n[green]Forecast complete![/green]")
+    console.print(f"Output: [cyan]{output_path}[/cyan]")
 
 
 @app.callback()
