@@ -59,6 +59,14 @@ This is a substantially modified version of Paraglidable, including:
    - pyparaglide config - Display current configuration
    - pyparaglide info - System information
    - pyparaglide train - Train CELLS/SPOTS models
+   - pyparaglide forecast - Generate flyability forecasts from GFS GRIB data
+
+7. Forecast generation
+   - Inference module for generating predictions
+   - GribReader class for reading GFS GRIB2 files with pygrib
+   - Forecaster class for running model predictions
+   - JSON output format (no C++ tiler dependency)
+   - Direct spot forecasts instead of map tiles
 
 Original Copyright Notice:
 --------------------------
