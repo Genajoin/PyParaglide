@@ -80,14 +80,14 @@ def wind_uv_to_direction_bins(uv: np.ndarray, n_bins: int = 8) -> np.ndarray:
         (nb_samples, n_bins) array with magnitude in the direction bin
 
     Direction mapping (n_bins=8):
-        0 = East (u>0, v=0)
-        1 = Northeast
-        2 = North (u=0, v>0)
-        3 = Northwest
-        4 = West (u<0, v=0)
-        5 = Southwest
-        6 = South (u=0, v<0)
-        7 = Southeast
+        0 = West (u<0, v=0)
+        1 = Southwest
+        2 = South (u=0, v<0)
+        3 = Southeast
+        4 = East (u>0, v=0)
+        5 = Northeast
+        6 = North (u=0, v>0)
+        7 = Northwest
     """
     import math
 
