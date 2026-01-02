@@ -152,3 +152,7 @@ def get_settings() -> Settings:
     Uses lru_cache to ensure settings are loaded only once per process.
     """
     return Settings()
+
+
+# Global settings instance
+settings = get_settings()

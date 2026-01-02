@@ -13,6 +13,7 @@ from rich.table import Table
 from tqdm import tqdm
 
 from pyparaglide import __version__
+from pyparaglide.analysis import FlightAnalyzer, MeteoAnalyzer
 from pyparaglide.config import get_settings, parse_date_ranges
 from pyparaglide.downloads import GFSDownloader
 from pyparaglide.inference import Forecaster
@@ -107,6 +108,305 @@ def info() -> None:
     console.print(table)
 
 
+# Analyze subcommand
+analyze_app = typer.Typer(help="Analyze flights and weather data", add_completion=False)
+app.add_typer(analyze_app, name="analyze")
+
+
+@analyze_app.command()
+def flights(
+    flights_dir: str = typer.Option(None, "--flights-dir", "-d", help="Flights directory"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box filter: lat_min,lat_max,lon_min,lon_max"),
+    min_flights: int = typer.Option(0, "--min-flights", "-m", help="Min flights per spot"),
+) -> None:
+    """
+    Analyze flight distribution by cells and spots.
+
+    Shows:
+    - Total flights and bbox coverage
+    - Distribution by 1°×1° cells
+    - Distribution by month and country
+    - Top spots with coordinates
+    - Auto-detected cell clusters
+    - [bold yellow]Recommended bboxes[/bold yellow] for training
+
+    Example:
+        pyparaglide analyze flights
+        pyparaglide analyze flights --bbox 45,47,13,16 --min-flights 50
+    """
+    import datetime as dt
+
+    settings = get_settings()
+
+    if flights_dir is None:
+        flights_dir = settings.flights_dir
+
+    # Parse bbox
+    parsed_bbox = None
+    if bbox:
+        parts = [float(x.strip()) for x in bbox.split(",")]
+        if len(parts) == 4:
+            parsed_bbox = tuple(parts)
+        else:
+            console.print(f"[red]Invalid bbox format: {bbox}[/red]")
+            console.print("Expected: lat_min,lat_max,lon_min,lon_max")
+            raise typer.Exit(1)
+
+    # Create analyzer
+    console.print("[bold cyan]Analyzing flight data...[/bold cyan]\n")
+
+    try:
+        analyzer = FlightAnalyzer(
+            flights_dir=Path(flights_dir),
+            bbox=parsed_bbox,
+        )
+        result = analyzer.analyze(min_flights_threshold=min_flights)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display summary
+    from rich.panel import Panel
+
+    summary = f"""Total flights: {result.total_flights:,}
+Cells: {len(result.by_cell)}
+Countries: {len(result.by_country)}
+Spots with >={min_flights} flights: {len(result.by_spot)}"""
+
+    if result.bbox_coverage:
+        summary += f"\nInside bbox: {result.bbox_coverage.inside:,}"
+        summary += f"\nOutside bbox: {result.bbox_coverage.outside:,}"
+        summary += f"\nNo coordinates: {result.bbox_coverage.no_coords:,}"
+
+    console.print(Panel(summary, title="[bold]Flight Summary[/bold]", border_style="cyan"))
+
+    # By cell (top 20)
+    if result.by_cell:
+        console.print(f"\n[bold]BY CELL (1°×1°) - Top 20[/bold]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Cell", style="cyan")
+        table.add_column("Flights", style="green")
+
+        sorted_cells = sorted(result.by_cell.items(), key=lambda x: -x[1])
+        for cell, count in sorted_cells[:20]:
+            lat, lon = map(int, cell.split(","))
+            table.add_row(f"({lat:3d}, {lon:3d})", f"{count:,}")
+
+        if len(result.by_cell) > 20:
+            table.add_row("...", f"and {len(result.by_cell) - 20} more")
+
+        console.print(table)
+
+    # By month
+    if result.by_month:
+        console.print(f"\n[bold]BY MONTH[/bold]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Month", style="cyan")
+        table.add_column("Flights", style="green")
+
+        month_names = {
+            1: "Jan",
+            2: "Feb",
+            3: "Mar",
+            4: "Apr",
+            5: "May",
+            6: "Jun",
+            7: "Jul",
+            8: "Aug",
+            9: "Sep",
+            10: "Oct",
+            11: "Nov",
+            12: "Dec",
+        }
+
+        for month in sorted(result.by_month.keys()):
+            table.add_row(month_names[month], f"{result.by_month[month]:,}")
+
+        console.print(table)
+
+    # By country
+    if result.by_country:
+        console.print(f"\n[bold]BY COUNTRY (top 10)[/bold]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Country", style="cyan")
+        table.add_column("Flights", style="green")
+
+        sorted_countries = sorted(result.by_country.items(), key=lambda x: -x[1])
+        for country, count in sorted_countries[:10]:
+            table.add_row(country, f"{count:,}")
+
+        console.print(table)
+
+    # By spot
+    if result.by_spot:
+        console.print(f"\n[bold]BY SPOT (top 20)[/bold]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Name", style="cyan")
+        table.add_column("Flights", style="green")
+        table.add_column("Coords", style="yellow")
+
+        sorted_spots = sorted(result.by_spot.items(), key=lambda x: -x[1].count)
+        for spot_id, data in sorted_spots[:20]:
+            table.add_row(data.name[:30], f"{data.count:,}", f"({data.lat:.2f}, {data.lon:.2f})")
+
+        console.print(table)
+
+    # Recommendations
+    console.print(f"\n[bold yellow]RECOMMENDATIONS[/bold yellow]")
+    console.print("[dim](Analysis-based suggestions - user may have intentionally different settings)[/dim]\n")
+
+    if result.clusters:
+        console.print(f"[bold]Detected Cell Clusters:[/bold]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("#", style="cyan")
+        table.add_column("BBox", style="green")
+        table.add_column("Cells", style="yellow")
+        table.add_column("Flights", style="yellow")
+        table.add_column("Top Spot", style="blue")
+
+        for i, cluster in enumerate(result.clusters[:5], 1):
+            bbox_str = f"{cluster.lat_min},{cluster.lat_max},{cluster.lon_min},{cluster.lon_max}"
+            table.add_row(str(i), bbox_str, str(cluster.count), f"{cluster.flights:,}", cluster.top_spot[:20])
+
+        console.print(table)
+
+        # Best cluster recommendation
+        best = result.clusters[0]
+        console.print(f"\n[bold yellow]Recommended bbox for best cluster:[/bold yellow]")
+        console.print(f"  [cyan]--bbox {best.lat_min},{best.lat_max},{best.lon_min},{best.lon_max}[/cyan]")
+        console.print(f"  [dim]({best.flights:,} flights in {best.count} cells)[/dim]")
+
+
+@analyze_app.command()
+def meteo(
+    gfs_dir: str = typer.Option(None, "--gfs-dir", "-d", help="GFS directory"),
+    dates: str = typer.Option(None, "--dates", "-D", help="Date ranges to check"),
+) -> None:
+    """
+    Analyze downloaded GFS weather data.
+
+    Shows:
+    - Available days with complete data (06h, 12h, 18h)
+    - Completeness percentage
+    - Missing days by month
+    - [bold yellow]Recommendations[/bold yellow] for downloading
+
+    Example:
+        pyparaglide analyze meteo
+        pyparaglide analyze meteo --dates 2024-06-01:2024-08-31
+    """
+    import datetime as dt
+
+    settings = get_settings()
+
+    if gfs_dir is None:
+        gfs_dir = settings.gfs_dir
+
+    # Parse date ranges
+    date_ranges = None
+    if dates:
+        try:
+            date_ranges = parse_date_ranges(dates)
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1)
+    elif settings.training_dates:
+        str_ranges = settings.parse_training_dates()
+        if str_ranges:
+            date_ranges = [
+                (
+                    dt.datetime.strptime(start, "%Y-%m-%d").date(),
+                    dt.datetime.strptime(end, "%Y-%m-%d").date(),
+                )
+                for start, end in str_ranges
+            ]
+
+    # Create analyzer
+    console.print("[bold cyan]Analyzing GFS data...[/bold cyan]\n")
+
+    try:
+        analyzer = MeteoAnalyzer(
+            gfs_dir=Path(gfs_dir),
+            date_ranges=date_ranges,
+        )
+        result = analyzer.check_completeness()
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display summary
+    from rich.panel import Panel
+
+    completeness_color = "green" if result.complete_percentage >= 90 else "yellow"
+    if result.complete_percentage < 70:
+        completeness_color = "red"
+
+    summary = f"""Completeness: [{completeness_color}]{result.complete_percentage:.1f}%[/{completeness_color}]
+Available days: {len(result.available_days)}
+Missing days: {len(result.missing_days)}"""
+
+    console.print(Panel(summary, title="[bold]GFS Data Summary[/bold]", border_style="cyan"))
+
+    # By month
+    if result.by_month:
+        console.print(f"\n[bold]Completeness by Month:[/bold]")
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Month", style="cyan")
+        table.add_column("Expected", style="yellow")
+        table.add_column("Available", style="green")
+        table.add_column("Missing", style="red")
+        table.add_column("Completeness", style="yellow")
+
+        for month, stats in sorted(result.by_month.items()):
+            color = "green" if stats.completeness_percentage >= 90 else "yellow"
+            if stats.completeness_percentage < 70:
+                color = "red"
+            table.add_row(
+                month,
+                str(stats.expected_days),
+                str(stats.available_days),
+                str(len(stats.missing_days)),
+                f"[{color}]{stats.completeness_percentage:.1f}%[/{color}]",
+            )
+
+        console.print(table)
+
+    # Recommendations
+    console.print(f"\n[bold yellow]RECOMMENDATIONS[/bold yellow]")
+    console.print("[dim](Analysis-based suggestions - user may have intentionally different settings)[/dim]\n")
+
+    if result.missing_days:
+        console.print(f"[yellow]Missing {len(result.missing_days)} days - consider downloading:[/yellow]")
+
+        # Group by date ranges
+        ranges = []
+        current_start = None
+        prev_date = None
+
+        for d in sorted(result.missing_days):
+            if current_start is None:
+                current_start = d
+                prev_date = d
+            elif (d - prev_date).days <= 2:  # Within 2 days - same range
+                prev_date = d
+            else:
+                ranges.append((current_start, prev_date))
+                current_start = d
+                prev_date = d
+
+        if current_start:
+            ranges.append((current_start, prev_date))
+
+        # Format ranges for command line
+        range_strs = []
+        for start, end in ranges:
+            range_strs.append(f"{start.isoformat()}:{end.isoformat()}")
+
+        console.print(f"  [cyan]pyparaglide download --dates \"{' ,'.join(range_strs)}\"[/cyan]")
+    else:
+        console.print(f"[green]All expected days are available![/green]")
+
+
 @app.command()
 def train(
     model_type: str = typer.Option("spots", "--model", "-m", help="Model type: 'cells' or 'spots' (default: spots)"),
@@ -153,14 +453,8 @@ def train(
 
     # Parse cells
     if cells:
-        # Support both: "--cells 1" (first N cells) and "--cells 0,1,2" (specific indices)
-        parsed = [int(c.strip()) for c in cells.split(",")]
-        if len(parsed) == 1:
-            # Single number means "first N cells"
-            cells_list = list(range(parsed[0]))
-        else:
-            # Multiple numbers mean specific cell indices
-            cells_list = parsed
+        # Support: "--cells 3" (cell index 3) and "--cells 0,1,2" (specific indices)
+        cells_list = [int(c.strip()) for c in cells.split(",")]
     else:
         cells_list = None  # Will use all cells
 
@@ -231,10 +525,11 @@ def train(
         )
     else:
         # SPOTS: Train one model per cell
+        actual_cells = cells_list if cells_list is not None else list(range(10))
         _train_spots(
             data_dir=data_dir,
             models_dir=models_dir,
-            nb_cells=nb_cells_to_train,
+            cells_to_train=actual_cells,
             epochs=epochs,
             batch_size=batch_size,
             lr_init=lr_init,
@@ -311,7 +606,7 @@ def _train_cells(
 def _train_spots(
     data_dir: str,
     models_dir: str,
-    nb_cells: int,
+    cells_to_train: list[int],
     epochs: int,
     batch_size: int,
     lr_init: float,
@@ -320,17 +615,17 @@ def _train_spots(
     super_resolution: int,
 ) -> None:
     """Train SPOTS models (one per cell)."""
-    cells_weight_path = Path(models_dir) / "cells_.weights.h5"
+    cells_weight_path = Path(models_dir) / "cells.weights.h5"
     trained_count = 0
     skipped_count = 0
 
     console.print(f"[dim]Data directory: {data_dir}[/dim]")
     console.print(f"[dim]Models directory: {models_dir}[/dim]")
-    console.print(f"[dim]Training {nb_cells} SPOTS models (one per cell)[/dim]")
+    console.print(f"[dim]Training {len(cells_to_train)} SPOTS models (one per cell)[/dim]")
     console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
     console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
 
-    for cell_idx in range(nb_cells):
+    for cell_idx in cells_to_train:
         console.print(f"[bold cyan]Training cell {cell_idx}...[/bold cyan]")
 
         try:
@@ -358,7 +653,7 @@ def _train_spots(
             trainer.create_model(cells=[cell_idx], super_resolution=super_resolution)
 
             # Load weights from CELLS
-            trainer.load_weights_from_cells(cells_weight_path, freeze_transferred=True)
+            trainer.load_weights_from_cells(cells_weight_path, freeze_transferred=False)
 
             # Train
             console.print("[yellow]Training...[/yellow]")
@@ -600,6 +895,8 @@ def build_dataset(
     bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
     min_flights: int = typer.Option(200, "--min-flights", help="Minimum flights per spot"),
     no_flights: bool = typer.Option(False, "--no-flights", help="Skip flight data processing"),
+    force: bool = typer.Option(False, "--force", help="Force rebuild even if PKL files exist"),
+    analyze: bool = typer.Option(False, "--analyze", "-a", help="Run analysis and show recommendations after build"),
 ) -> None:
     """
     Build PKL dataset from GFS GRIB files and flight data.
@@ -673,36 +970,110 @@ def build_dataset(
     console.print(f"[bold cyan]Building PKL dataset[/bold cyan]")
     console.print(f"[dim]Date ranges: {len(date_ranges)}[/dim]\n")
 
-    # Create builder
+    # Create builder with elevation_dir from settings
+    from pyparaglide.config import settings
+
     builder = DatasetBuilder(
         gfs_dir=gfs_dir,
         flights_dir=flights_dir,
         output_dir=output_dir,
         bbox=tuple(float(x) for x in bbox.split(",")),
+        elevation_dir=settings.elevation_dir,
     )
 
-    # Build dataset for each range
-    total_stats = {"cells": 0, "spots": 0, "days": 0}
+    # CRITICAL FIX: Build dataset for ALL date ranges at once
+    # This fixes the sequential overwrite bug where each range was overwriting previous data
+    stats = builder.build_all(
+        date_ranges=date_ranges,
+        min_flights_per_spot=min_flights,
+        include_flights=not no_flights,
+        cluster_distance_km=settings.spot_cluster_distance_km,
+        num_workers=settings.workers,
+        force=force,
+    )
 
-    for start, end in date_ranges:
-        console.print(f"\n[yellow]Processing range: {start} to {end}[/yellow]")
-        stats = builder.build(
-            start_date=start,
-            end_date=end,
-            min_flights_per_spot=min_flights,
-            include_flights=not no_flights,
-        )
-
-        total_stats["cells"] = max(total_stats["cells"], stats.get("cells", 0))
-        total_stats["spots"] = max(total_stats["spots"], stats.get("spots", 0))
-        total_stats["days"] += stats.get("days", 0)
-
-    console.print(f"\n[bold]Total Summary:[/bold]")
-    console.print(f"  Cells: {total_stats['cells']}")
-    console.print(f"  Spots: {total_stats['spots']}")
-    console.print(f"  Days: {total_stats['days']}")
+    console.print(f"\n[bold]Summary:[/bold]")
+    console.print(f"  Cells: {stats['cells']}")
+    console.print(f"  Spots: {stats['spots']}")
+    console.print(f"  Days: {stats['days']}")
 
     console.print(f"\n[green]Dataset build complete![/green]")
+
+    # Run analysis if requested
+    if analyze:
+        console.print(f"\n[bold cyan]Running post-build analysis...[/bold cyan]\n")
+
+        # Flight analysis
+        if not no_flights:
+            console.print(f"[bold]Analyzing flight data...[/bold]")
+            try:
+                flight_analyzer = FlightAnalyzer(
+                    flights_dir=Path(flights_dir),
+                    bbox=tuple(float(x) for x in bbox.split(",")),
+                )
+                flight_result = flight_analyzer.analyze(min_flights_threshold=min_flights)
+
+                # Show flight summary
+                from rich.panel import Panel
+
+                flight_summary = f"""Total flights: {flight_result.total_flights:,}
+Cells: {len(flight_result.by_cell)}
+Spots with >={min_flights} flights: {len(flight_result.by_spot)}"""
+
+                console.print(Panel(flight_summary, title="[bold]Flight Summary[/bold]", border_style="cyan"))
+
+                # Show top clusters
+                if flight_result.clusters:
+                    console.print(f"\n[bold]Top Clusters:[/bold]")
+                    table = Table(show_header=True, header_style="bold magenta")
+                    table.add_column("BBox", style="green")
+                    table.add_column("Cells", style="yellow")
+                    table.add_column("Flights", style="yellow")
+                    table.add_column("Top Spot", style="blue")
+
+                    for cluster in flight_result.clusters[:3]:
+                        bbox_str = f"{cluster.lat_min},{cluster.lat_max},{cluster.lon_min},{cluster.lon_max}"
+                        table.add_row(bbox_str, str(cluster.count), f"{cluster.flights:,}", cluster.top_spot[:20])
+
+                    console.print(table)
+
+                    # Recommendation
+                    best = flight_result.clusters[0]
+                    console.print(f"\n[bold yellow]Recommended bbox:[/bold yellow] [cyan]{best.lat_min},{best.lat_max},{best.lon_min},{best.lon_max}[/cyan]")
+                    console.print(f"[dim]({best.flights:,} flights in {best.count} cells)[/dim]")
+            except ValueError as e:
+                console.print(f"[yellow]Flight analysis skipped: {e}[/yellow]")
+
+        # Meteo analysis
+        console.print(f"\n[bold]Analyzing GFS data...[/bold]")
+        try:
+            meteo_analyzer = MeteoAnalyzer(
+                gfs_dir=Path(gfs_dir),
+                date_ranges=date_ranges,
+            )
+            meteo_result = meteo_analyzer.check_completeness()
+
+            # Show meteo summary
+            completeness_color = "green" if meteo_result.complete_percentage >= 90 else "yellow"
+            if meteo_result.complete_percentage < 70:
+                completeness_color = "red"
+
+            meteo_summary = f"""Completeness: [{completeness_color}]{meteo_result.complete_percentage:.1f}%[/{completeness_color}]
+Available days: {len(meteo_result.available_days)}
+Missing days: {len(meteo_result.missing_days)}"""
+
+            console.print(Panel(meteo_summary, title="[bold]GFS Data Summary[/bold]", border_style="cyan"))
+
+            if meteo_result.missing_days:
+                console.print(f"\n[yellow]Missing {len(meteo_result.missing_days)} days[/yellow]")
+            else:
+                console.print(f"\n[green]All expected days are available![/green]")
+        except ValueError as e:
+            console.print(f"[yellow]Meteo analysis skipped: {e}[/yellow]")
+
+        # Show disclaimer
+        console.print(f"\n[dim]Analysis results are recommendations based on your data.[/dim]")
+        console.print(f"[dim]You may have intentionally chosen different settings.[/dim]")
 
 
 @app.callback()

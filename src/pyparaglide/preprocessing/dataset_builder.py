@@ -2,22 +2,35 @@
 Dataset builder for PyParaglide.
 
 Builds PKL files from GFS GRIB data and flight records.
+
+This is the full implementation using the 4-phase pipeline:
+1. BuildCellsPhase - Generate 1x1 degree cells and map to GRIB grid
+2. BuildMeteoPhase - Scan GFS data and extract weather parameters
+3. BuildFlightsPhase - Process xContest flights and create spot PKL files
+4. BuildTerrainPhase - Extract mountainess data from elevation tiles
+
+CRITICAL FIX: build_all() method accepts multiple date ranges and accumulates
+ALL data before saving, fixing the sequential overwrite bug.
 """
 
 import datetime as dt
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, List, Tuple, Optional
 
-import numpy as np
-from tqdm import tqdm
+from pyparaglide.preprocessing.phases import (
+    BuildCellsPhase,
+    BuildMeteoPhase,
+    BuildFlightsPhase,
+    BuildTerrainPhase,
+)
 
 
 class DatasetBuilder:
     """
     Build training dataset from GFS GRIB files and flight data.
 
-    This is a simplified version - for full functionality,
-    use scripts/build_dataset/build_dataset.py.
+    This class orchestrates the 4-phase dataset building pipeline.
     """
 
     def __init__(
@@ -54,7 +67,10 @@ class DatasetBuilder:
         include_flights: bool = True,
     ) -> dict[str, Any]:
         """
-        Build PKL dataset for date range.
+        Build PKL dataset for a single date range.
+
+        DEPRECATED: This method is kept for backward compatibility.
+        Use build_all() instead to avoid sequential overwrite issues.
 
         Args:
             start_date: Start date
@@ -70,224 +86,130 @@ class DatasetBuilder:
         if isinstance(end_date, str):
             end_date = dt.datetime.strptime(end_date, "%Y-%m-%d").date()
 
+        return self.build_all(
+            date_ranges=[(start_date, end_date)],
+            min_flights_per_spot=min_flights_per_spot,
+            include_flights=include_flights,
+        )
+
+    def build_all(
+        self,
+        date_ranges: List[Tuple[date, date]],
+        min_flights_per_spot: int = 200,
+        include_flights: bool = True,
+        cluster_distance_km: Optional[float] = None,
+        num_workers: int = 4,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Build PKL dataset for multiple date ranges.
+
+        CRITICAL FIX: This method accumulates data from ALL date ranges
+        before saving, fixing the sequential overwrite bug.
+
+        Args:
+            date_ranges: List of (start_date, end_date) tuples
+            min_flights_per_spot: Minimum flights required per spot
+            include_flights: Whether to include flight data processing
+            cluster_distance_km: Spot clustering radius in km
+            num_workers: Number of multiprocessing workers for GRIB processing
+            force: Force rebuild even if PKL files exist
+
+        Returns:
+            Dictionary with build statistics
+        """
         print(f"Building dataset:")
-        print(f"  Date range: {start_date} to {end_date}")
+        print(f"  Date ranges: {len(date_ranges)} range(s)")
+        for start, end in date_ranges:
+            print(f"    {start} to {end}")
         print(f"  Bbox: {self.bbox}")
         print(f"  Output: {self.output_dir}")
+        print(f"  Workers: {num_workers}")
         print()
 
-        # Phase 1: Build meteo data structure
-        print("[Phase 1] Building meteo data structure...")
-        self._build_meteo_structure(start_date, end_date)
+        # Phase 1: Build cells
+        phase1 = BuildCellsPhase(
+            bbox=self.bbox,
+            gfs_dir=self.gfs_dir,
+            out_dir=self.output_dir,
+            force=force,
+        )
+        cells_latlon, cells_grib = phase1.execute()
 
-        # Phase 2: Build cell/spot definitions
-        print("[Phase 2] Building cell and spot definitions...")
-        self._build_grid_structure()
+        # Phase 2: Build meteo data - CRITICAL: Pass ALL date_ranges at once
+        phase2 = BuildMeteoPhase(
+            bbox=self.bbox,
+            gfs_dir=self.gfs_dir,
+            cells_latlon=cells_latlon,
+            out_dir=self.output_dir,
+            date_ranges=date_ranges,  # ALL ranges, accumulated
+            num_workers=num_workers,
+            force=force,
+        )
+        meteo_days = phase2.execute()
 
         # Phase 3: Process flights
+        spots_count = 0
         if include_flights:
-            print("[Phase 3] Processing flight data...")
-            self._process_flights(start_date, end_date, min_flights_per_spot)
+            phase3 = BuildFlightsPhase(
+                flights_dir=self.flights_dir,
+                out_dir=self.output_dir,
+                cells_latlon=cells_latlon,
+                meteo_days=meteo_days,
+                bbox=self.bbox,
+                date_ranges=date_ranges,  # ALL ranges, accumulated
+                min_flights=min_flights_per_spot,
+                cluster_distance_km=cluster_distance_km,
+            )
+            phase3.execute()
+            # Count spots from spots.pkl
+            import pickle
+            try:
+                with open(self.output_dir / "spots.pkl", 'rb') as f:
+                    spots = pickle.load(f)
+                    spots_count = len(spots)
+            except:
+                spots_count = 0
         else:
-            print("[Phase 3] Skipping flight processing (--no-flights)")
-
-        # Phase 4: Extract data into PKL files
-        print("[Phase 4] Extracting data to PKL files...")
-        stats = self._extract_to_pkl(start_date, end_date)
-
-        print()
-        print("Dataset build complete!")
-        print(f"  Cells: {stats.get('cells', 0)}")
-        print(f"  Spots: {stats.get('spots', 0)}")
-        print(f"  Days: {stats.get('days', 0)}")
-
-        return stats
-
-    def _build_meteo_structure(self, start: dt.date, end: dt.date) -> None:
-        """Build meteo parameter structure from PKL files or defaults."""
-        import pickle
-
-        # Check if meteo_params.pkl exists
-        params_path = self.output_dir / "meteo_params.pkl"
-
-        if params_path.exists():
-            print(f"  Using existing {params_path.name}")
-            with open(params_path, "rb") as f:
-                self.meteo_params = pickle.load(f)
-        else:
-            print("  Creating default meteo_params structure")
-            # Create default parameters
-            self.meteo_params = self._create_default_params()
-
-            # Save to file
-            with open(params_path, "wb") as f:
-                pickle.dump(self.meteo_params, f)
-
-    def _create_default_params(self) -> list:
-        """Create default meteo parameters structure."""
-        hours = [0, 6, 12, 18]
-        params = []
-
-        for hour in hours:
-            # Other parameters (5 × 9 levels = 45)
-            for name, levels in [
-                ("Vertical velocity", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-                ("Geopotential Height", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-                ("Absolute vorticity", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-                ("Temperature", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-                ("Relative humidity", [200, 300, 400, 500, 600, 700, 800, 900, 1000]),
-            ]:
-                for level in levels:
-                    params.append((hour, name, [[("isobaricInhPa", level)]]))
-
-            # Wind parameters (2 × 5 levels = 10)
-            for name, levels in [
-                ("U component of wind", [600, 700, 800, 900, 1000]),
-                ("V component of wind", [600, 700, 800, 900, 1000]),
-            ]:
-                for level in levels:
-                    params.append((hour, name, [[("isobaricInhPa", level)]]))
-
-            # Humidity parameters (2)
-            for name, levels in [
-                ("Precipitable water", [0]),
-                ("Cloud water", [0]),
-            ]:
-                for level in levels:
-                    params.append((hour, name, [[("entireAtmosphere", level)]]))
-
-        return params
-
-    def _build_grid_structure(self) -> None:
-        """Build grid cell definitions from bbox."""
-        import pickle
-
-        lat_min, lat_max, lon_min, lon_max = self.bbox
-
-        # Create 1° grid cells
-        lats = np.arange(lat_min, lat_max, 1.0)
-        lons = np.arange(lon_min, lon_max, 1.0)
-
-        self.cells = []
-        for i, lat in enumerate(lats):
-            for j, lon in enumerate(lons):
-                cell_id = i * len(lons) + j
-                self.cells.append({
-                    "id": cell_id,
-                    "lat": lat,
-                    "lon": lon,
-                    "row": i,
-                    "col": j,
-                })
-
-        # Save cells
-        cells_path = self.output_dir / "sorted_cells.pkl"
-        with open(cells_path, "wb") as f:
-            pickle.dump([(c["row"], c["col"]) for c in self.cells], f)
-
-        cells_latlon_path = self.output_dir / "sorted_cells_latlon.pkl"
-        with open(cells_latlon_path, "wb") as f:
-            pickle.dump([(c["lat"], c["lon"]) for c in self.cells], f)
-
-        print(f"  Created {len(self.cells)} grid cells")
-
-    def _process_flights(self, start: dt.date, end: dt.date, min_flights: int) -> None:
-        """Process flight data from xContest JSON files."""
-        import json
-        import pickle
-
-        # Find JSON files in flights directory
-        json_files = list(self.flights_dir.glob("*.json"))
-
-        if not json_files:
-            print(f"  Warning: No JSON files found in {self.flights_dir}")
-            # Create empty flight data structure
-            nb_days = (end - start).days + 1
-            nb_cells = len(self.cells)
-
+            print("\n=== Phase 3: Skipping flight processing (--no-flights) ===")
+            # Create empty flights PKL
+            import pickle
+            import numpy as np
+            nb_cells = len(cells_latlon)
+            nb_days = len(meteo_days)
             flights_by_cell_day = np.zeros((nb_cells * nb_days,), dtype=object)
             for i in range(len(flights_by_cell_day)):
                 flights_by_cell_day[i] = []
-
-            mountainess_by_cell_alt = np.zeros((nb_cells, 5), dtype=np.float32)
-
-            # Save empty structures
-            with open(self.output_dir / "flights_by_cell_day.pkl", "wb") as f:
+            with open(self.output_dir / "flights_by_cell_day.pkl", 'wb') as f:
                 pickle.dump(flights_by_cell_day, f)
-            with open(self.output_dir / "mountainess_by_cell_alt.pkl", "wb") as f:
+
+        # Phase 4: Build terrain data
+        if self.elevation_dir:
+            phase4 = BuildTerrainPhase(
+                elevation_dir=self.elevation_dir,
+                out_dir=self.output_dir,
+                cells_latlon=cells_latlon,
+                force=force,
+            )
+            phase4.execute()
+        else:
+            print("\n=== Phase 4: Skipping terrain (no elevation dir) ===")
+            # Create default mountainess
+            import pickle
+            import numpy as np
+            nb_cells = len(cells_latlon)
+            mountainess_by_cell_alt = np.zeros((nb_cells, 5), dtype=np.float32)
+            with open(self.output_dir / "mountainess_by_cell_alt.pkl", 'wb') as f:
                 pickle.dump(mountainess_by_cell_alt, f)
 
-            return
-
-        print(f"  Found {len(json_files)} flight files")
-
-        nb_days = (end - start).days + 1
-        nb_cells = len(self.cells)
-
-        # Process flights (simplified - full implementation in scripts/)
-        flights_by_cell_day = []
-        spots = []
-
-        for json_file in tqdm(json_files, desc="  Processing flights"):
-            try:
-                with open(json_file) as f:
-                    data = json.load(f)
-                # Process data...
-                # (Full implementation in scripts/build_dataset/flight_processor.py)
-            except Exception as e:
-                print(f"    Warning: Error processing {json_file.name}: {e}")
-
-        # Create mountainess data (elevation-based terrain data)
-        # For now, use zeros - should be computed from elevation tiles
-        mountainess_by_cell_alt = np.zeros((nb_cells, 5), dtype=np.float32)
-
-        # Convert to proper format if needed
-        if isinstance(flights_by_cell_day, list):
-            flights_array = np.zeros((nb_cells * nb_days,), dtype=object)
-            for i in range(len(flights_array)):
-                flights_array[i] = []
-            # Copy processed data if any
-            for i, item in enumerate(flights_by_cell_day):
-                if i < len(flights_array):
-                    flights_array[i] = item
-            flights_by_cell_day = flights_array
-
-        # Save structures
-        with open(self.output_dir / "flights_by_cell_day.pkl", "wb") as f:
-            pickle.dump(flights_by_cell_day, f)
-        with open(self.output_dir / "mountainess_by_cell_alt.pkl", "wb") as f:
-            pickle.dump(mountainess_by_cell_alt, f)
-        with open(self.output_dir / "spots.pkl", "wb") as f:
-            pickle.dump(spots, f)
-
-    def _extract_to_pkl(self, start: dt.date, end: dt.date) -> dict[str, int]:
-        """Extract weather data from GRIB files to PKL format."""
-        import pickle
-
-        # This is a simplified version - full implementation processes
-        # all GRIB files and extracts the data into the expected format.
-        # For full functionality, use scripts/build_dataset.py
-
-        nb_days = (end - start).days + 1
-        nb_cells = len(self.cells)
-
-        # Create meteo_days
-        meteo_days = [start + dt.timedelta(days=d) for d in range(nb_days)]
-
-        # Create meteo_content_by_cell_day (simplified)
-        nb_params = len(self.meteo_params)
-        meteo_content = np.random.randn(nb_cells * nb_days, nb_params).astype(np.float32)
-
-        # Save
-        with open(self.output_dir / "meteo_days.pkl", "wb") as f:
-            pickle.dump(meteo_days, f)
-        with open(self.output_dir / "meteo_content_by_cell_day.pkl", "wb") as f:
-            pickle.dump(meteo_content, f)
-
-        print(f"  Extracted data for {nb_days} days, {nb_cells} cells, {nb_params} parameters")
+        print()
+        print("Dataset build complete!")
+        print(f"  Cells: {len(cells_latlon)}")
+        print(f"  Spots: {spots_count}")
+        print(f"  Days: {len(meteo_days)}")
 
         return {
-            "cells": nb_cells,
-            "days": nb_days,
-            "spots": 0,  # Would be computed from actual flight data
+            "cells": len(cells_latlon),
+            "spots": spots_count,
+            "days": len(meteo_days),
         }

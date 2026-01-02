@@ -259,8 +259,8 @@ class WindBlockSpots(tf.keras.layers.Layer):
 
         self.nb_spots = nb_spots
 
-        initial_wind_weight_value = 1.0
-        initial_alt_value = 2.0
+        initial_wind_weight_value = 0.1
+        initial_alt_value = 4.0
 
         self.initial_weights = [
             tf.keras.initializers.Constant(
@@ -372,7 +372,7 @@ class PopulationBlock(tf.keras.layers.Layer):
                 int(shape_prediction[-1]),
             ),  # (nbCells*super_resolution^2, nbAltitudes)
             trainable=True,
-            initializer=tf.keras.initializers.Constant(value=0.5),
+            initializer=tf.keras.initializers.Constant(value=1.0),
             dtype=np.float32,
             constraint=tf.keras.constraints.NonNeg(),
         )

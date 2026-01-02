@@ -131,6 +131,7 @@ pyparaglide forecast
 | `pyparaglide info` | Show system information |
 | `pyparaglide download` | Download GFS weather data |
 | `pyparaglide build-dataset` | Build PKL dataset from GRIB + flights |
+| `pyparaglide analyze` | Analyze flights and weather data |
 | `pyparaglide train` | Train neural network model |
 | `pyparaglide forecast` | Generate flyability forecast |
 
@@ -180,6 +181,27 @@ pyparaglide forecast --output-dir /path/to/output
 # Show debug information
 pyparaglide forecast --verbose
 ```
+
+### Example: Analyze Data
+
+```bash
+# Analyze flight distribution (shows clusters and recommends optimal bbox)
+pyparaglide analyze flights
+
+# Analyze with bbox filter and min flights threshold
+pyparaglide analyze flights --bbox 45,47,13,16 --min-flights 50
+
+# Analyze GFS data completeness
+pyparaglide analyze meteo
+
+# Check specific date ranges
+pyparaglide analyze meteo --dates 2024-06-01:2024-08-31
+
+# Build with auto-analysis
+pyparaglide build-dataset --analyze
+```
+
+**Note:** Analysis results are recommendations based on your data. You may have intentionally chosen different settings.
 
 ## Configuration
 
