@@ -373,6 +373,7 @@ class PopulationBlock(tf.keras.layers.Layer):
             ),  # (nbCells*super_resolution^2, nbAltitudes)
             trainable=True,
             initializer=tf.keras.initializers.Constant(value=0.5),
+            dtype=np.float32,
             constraint=tf.keras.constraints.NonNeg(),
         )
 

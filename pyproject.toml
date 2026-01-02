@@ -9,10 +9,10 @@ description = "AI-based paragliding flyability forecasting (modernized fork of P
 readme = "README.md"
 license = {text = "GPL-3.0-or-later"}
 authors = [
-    {name = "Evgeny Istomin", email = "genajoin@gmail.com"}
+    {name = "Evgeny Istomin", email = "gena@regimov.net"}
 ]
 maintainers = [
-    {name = "Evgeny Istomin", email = "genajoin@gmail.com"}
+    {name = "Evgeny Istomin", email = "gena@regimov.net"}
 ]
 keywords = [
     "paragliding",
@@ -20,7 +20,7 @@ keywords = [
     "machine-learning",
     "weather",
     "gfs",
-    "tensorflow",
+    "tensorflow-cpu",
     "cli",
     "python312"
 ]
@@ -38,7 +38,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     # Core ML
-    "tensorflow>=2.15,<2.20",
+    "tensorflow-cpu>=2.15,<2.20",
     "numpy>=1.26.0,<2.0",  # TF 2.15 compatibility
 
     # Data processing

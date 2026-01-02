@@ -6,6 +6,7 @@ Compatible with the original Paraglidable PKL format.
 """
 
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 
 import numpy as np
@@ -281,6 +282,7 @@ class Dataset:
         Get flight data for spots model.
 
         Returns dict mapping cell_id -> list of arrays (one per spot)
+        Each array is binary: 1.0 if there was at least one flight on that day
         """
         if not self.has_spots:
             return {c: [] for c in cells}
@@ -292,13 +294,36 @@ class Dataset:
 
             for spot_idx in spots_in_cell:
                 flights = self.flights_by_spot[spot_idx]
-                # Convert to flown array (same format as original)
-                flown = np.array([1.0 if len(f) > 0 else 0.0 for _ in range(self.nb_days)], dtype=np.float32)
+                # Build binary flown array: 1.0 if any flight on that day
+                flown = np.zeros(self.nb_days, dtype=np.float32)
+                for flight_record in flights:
+                    # flight_record is (datetime_str, (score, None, takeoff_alt, lat, lon))
+                    datetime_str = flight_record[0]
+                    try:
+                        flight_date = datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S').date()
+                        if flight_date in self.meteo_days:
+                            day_idx = self.meteo_days.index(flight_date)
+                            flown[day_idx] = 1.0
+                    except (ValueError, KeyError):
+                        pass
                 spot_flights.append(flown)
 
             result[cell] = spot_flights
 
         return result
+
+    def get_spots(self) -> dict[int, list]:
+        """
+        Get spots by cell.
+
+        Returns:
+            Dict mapping cell_id -> list of spot indices
+            Returns empty dict if spots data not available
+        """
+        if not self.has_spots:
+            return {}
+        # Convert list to dict: [[spots_cell_0], [spots_cell_1], ...] -> {0: [...], 1: [...]}
+        return {i: spots for i, spots in enumerate(self.spots_by_cell) if spots}
 
     @staticmethod
     def _barometric_leveling(altitude: float) -> float:

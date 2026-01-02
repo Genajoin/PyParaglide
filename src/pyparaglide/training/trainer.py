@@ -142,22 +142,43 @@ class Trainer:
         X_other_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_other), dtype=np.float32)
         for h in range(3):
             for i, cell in enumerate(cells):
-                start_idx = cell * self.nb_days
-                X_other_stacked[:, i, h, :] = X_other[h][start_idx : start_idx + self.nb_days, :]
+                if self.model_type == ModelType.CELLS:
+                    # For CELLS: data is stored in (nb_cells * nb_days, dim) format
+                    start_idx = cell * self.nb_days
+                    X_other_stacked[:, i, h, :] = X_other[h][start_idx : start_idx + self.nb_days, :]
+                else:
+                    # For SPOTS (per-cell): data is already (nb_days, dim) format
+                    X_other_stacked[:, i, h, :] = X_other[h]
 
         # Humidity (nb_days, nb_cells, 3, dim_humidity)
         dim_humidity = X_humidity[0].shape[1]
         X_humidity_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_humidity), dtype=np.float32)
         for h in range(3):
             for i, cell in enumerate(cells):
-                start_idx = cell * self.nb_days
-                X_humidity_stacked[:, i, h, :] = X_humidity[h][start_idx : start_idx + self.nb_days, :]
+                if self.model_type == ModelType.CELLS:
+                    start_idx = cell * self.nb_days
+                    X_humidity_stacked[:, i, h, :] = X_humidity[h][start_idx : start_idx + self.nb_days, :]
+                else:
+                    # For SPOTS (per-cell): data is already (nb_days, dim) format
+                    X_humidity_stacked[:, i, h, :] = X_humidity[h]
 
         # Wind (nb_days, nb_cells, nb_altitudes, 3, wind_dim)
         X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, self.nb_altitudes, 3, self.wind_dim), dtype=np.float32)
         for h in range(3):
-            wind_reshaped = X_wind[h].reshape(self.nb_days, nb_cells_model, self.nb_altitudes, self.wind_dim)
+            if self.model_type == ModelType.CELLS:
+                wind_reshaped = X_wind[h].reshape(self.nb_days, nb_cells_model, self.nb_altitudes, self.wind_dim)
+            else:
+                # For SPOTS (per-cell): reshape to (nb_days, 1, nb_altitudes, wind_dim)
+                wind_reshaped = X_wind[h].reshape(self.nb_days, 1, self.nb_altitudes, self.wind_dim)
             X_wind_stacked[:, :, :, h, :] = wind_reshaped
+
+        # For SPOTS single-cell training: squeeze cell dimension to match model input shapes
+        if self.model_type == ModelType.SPOTS and nb_cells_model == 1:
+            X_other_stacked = X_other_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
+            X_humidity_stacked = X_humidity_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
+            X_wind_stacked = X_wind_stacked[:, 0, :, :, :]  # (nb_days, 1, nb_altitudes, 3, wind_dim) -> (nb_days, nb_altitudes, 3, wind_dim)
+            # Note: SPOTS model doesn't use mountainess, so don't include it
+            return [X_date, X_dow, X_other_stacked, X_humidity_stacked, X_wind_stacked]
 
         return [X_date, X_dow, X_mountainess, X_other_stacked, X_humidity_stacked, X_wind_stacked]
 
@@ -176,7 +197,7 @@ class Trainer:
         else:
             # SPOTS model
             spots_data = self.dataset.get_flights_by_spots(cells)
-            return [np.stack([spots_data[c][s] for s in range(len(spots_data[c]))], axis=1) for c in cells if len(spots_data[c]) > 0]
+            return [np.stack([spots_data[c][s] for s in range(len(spots_data[c]))], axis=1, dtype=np.float32) for c in cells if len(spots_data[c]) > 0]
 
     def create_model(
         self,
@@ -205,10 +226,16 @@ class Trainer:
                 super_resolution=super_resolution,
             )
         else:
-            # SPOTS model - create cells data structure
+            # SPOTS model - create cells data structure with real spots
+            # For per-cell training, use sequential indices (0, 1, ...) instead of actual cell IDs
+            spots_by_cell = self.dataset.get_spots()
             cells_data = {}
-            for cell in cells:
-                cells_data[cell] = {"spots": list(range(10))}  # Placeholder
+            for sequential_idx, cell in enumerate(cells):
+                cell_spots = spots_by_cell.get(cell, [])
+                if not cell_spots:
+                    raise ValueError(f"No spots found for cell {cell}")
+                # Use sequential index as key to match input tensor indexing
+                cells_data[sequential_idx] = {"spots": cell_spots}
 
             self.model = ModelSpots.create_model(
                 problem_formulation=self.problem_formulation,
@@ -217,7 +244,7 @@ class Trainer:
                 other_dim=45,
                 humidity_dim=2,
                 nb_altitudes=self.nb_altitudes,
-                initialization={"date_factor": np.array([[1.275]]), "dow_factor": np.array([[1.0] * 7])},
+                initialization={"date_factor": np.array([[1.275]], dtype=np.float32), "dow_factor": np.array([[1.0] * 7], dtype=np.float32).T},
             )
 
         if load_weights:
@@ -231,19 +258,29 @@ class Trainer:
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded weights from {weight_path}")
 
-    def save_weights(self) -> None:
-        """Save model weights to directory."""
+    def save_weights(self, suffix: str = "") -> Path:
+        """
+        Save model weights to directory.
+
+        Args:
+            suffix: Optional suffix for filename (e.g., "_cell_0")
+
+        Returns:
+            Path where weights were saved
+        """
         self.models_dir.mkdir(parents=True, exist_ok=True)
 
         # Save normalization
         if self.normalization:
-            norm_path = self.models_dir / f"normalization_{self.model_type.name.lower()}.pkl"
+            norm_path = self.models_dir / f"normalization_{self.model_type.name.lower()}{suffix}.pkl"
             self.normalization.save(norm_path)
 
         # Save model weights
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}_.weights.h5"
+        model_name = self.model_type.name.lower()
+        weight_path = self.models_dir / f"{model_name}{suffix}.weights.h5"
         self.model.save_weights(weight_path)
         print(f"[INFO] Saved weights to {weight_path}")
+        return weight_path
 
     def train(
         self,
@@ -332,3 +369,120 @@ class Trainer:
         if not isinstance(results, dict):
             results = {"loss": results}
         return results
+
+    def load_weights_from_cells(
+        self,
+        cells_weight_path: Path,
+        freeze_transferred: bool = True,
+    ) -> None:
+        """
+        Load shared weights from trained CELLS model into SPOTS model.
+
+        Transfers:
+        - flyability_block (entire submodel)
+        - date_factor (DateBlock)
+        - dow_factor (DayOfWeekBlock)
+
+        Args:
+            cells_weight_path: Path to CELLS.weights.h5
+            freeze_transferred: Whether to freeze transferred layers
+
+        Raises:
+            ValueError: If model_type is not SPOTS or model not created
+        """
+        if self.model_type != ModelType.SPOTS:
+            raise ValueError("Weight transfer only applies to SPOTS model")
+
+        if self.model is None:
+            raise ValueError("Model must be created before loading weights")
+
+        print(f"[INFO] Loading weights from CELLS model: {cells_weight_path}")
+
+        # Create temporary CELLS model to load weights
+        temp_trainer = Trainer(
+            data_dir=self.data_dir,
+            model_type=ModelType.CELLS,
+            problem_formulation=self.problem_formulation,
+            models_dir=self.models_dir,
+        )
+
+        # Get same cell configuration
+        # Use only 1 cell for temp CELLS model (weights file might have been trained with 1 cell)
+        # The number of cells doesn't matter for weight transfer since we only need shared layers
+        cells_to_load = [0]  # Single cell to match weights file structure
+        temp_trainer.create_model(cells=cells_to_load)
+
+        temp_trainer.model.load_weights(str(cells_weight_path))
+
+        # Transfer weights for shared layers
+        shared_layer_names = [
+            "flyability_block",
+            "date_factor",
+            "dow_factor",
+        ]
+
+        for layer_name in shared_layer_names:
+            try:
+                cells_layer = temp_trainer.model.get_layer(layer_name)
+                spots_layer = self.model.get_layer(layer_name)
+
+                # Transfer weights
+                spots_layer.set_weights(cells_layer.get_weights())
+                print(f"[INFO] Transferred weights for layer: {layer_name}")
+
+                # Optionally freeze
+                if freeze_transferred:
+                    spots_layer.trainable = False
+                    print(f"[INFO] Frozen layer: {layer_name}")
+            except ValueError as e:
+                print(f"[WARNING] Could not transfer {layer_name}: {e}")
+
+        print("[INFO] Weight transfer complete")
+
+        # Recompile model after freezing layers
+        if freeze_transferred:
+            self.model.compile(
+                optimizer="adam",
+                loss=(
+                    "binary_crossentropy"
+                    if self.problem_formulation == ProblemFormulation.CLASSIFICATION
+                    else "mse"
+                ),
+            )
+
+    def prepare_data_for_cell(self, cell_index: int) -> tuple:
+        """
+        Prepare training data for a specific cell (SPOTS model).
+
+        Args:
+            cell_index: Index of the cell to prepare data for
+
+        Returns:
+            (X, Y) tuple where X is list of inputs, Y is list of outputs
+
+        Raises:
+            ValueError: If model_type is not SPOTS
+        """
+        if self.model_type != ModelType.SPOTS:
+            raise ValueError("Per-cell data preparation only for SPOTS model")
+
+        print(f"[INFO] Preparing data for cell {cell_index}")
+        return self.prepare_data(cells=[cell_index])
+
+    def get_spot_count_for_cell(self, cell_index: int) -> int:
+        """
+        Get number of spots in a specific cell.
+
+        Args:
+            cell_index: Index of the cell
+
+        Returns:
+            Number of spots in the cell
+
+        Raises:
+            ValueError: If cell has no spots or spots data not available
+        """
+        spots_by_cell = self.dataset.get_spots()
+        if cell_index not in spots_by_cell:
+            raise ValueError(f"No spots found for cell {cell_index}")
+        return len(spots_by_cell[cell_index])
