@@ -356,9 +356,47 @@ class PopulationBlock(tf.keras.layers.Layer):
         self.frozen_date_factor = not isinstance(var_date_factor, tf.Variable)
         self.frozen_dow_factor = not isinstance(var_dow_factor, tf.Variable)
         self.problem_formulation = problem_formulation
-        self.var_date_factor = var_date_factor
-        self.var_dow_factor = var_dow_factor
         self.super_resolution = super_resolution
+
+        # CRITICAL FIX: Variables created OUTSIDE the layer are not tracked by Keras in TF2.
+        # We need to recreate them INSIDE the layer using add_weight() for proper tracking.
+        # This ensures they appear in trainable_weights and get optimized during training.
+
+        # Extract initial value (works for both Variable and Tensor/ndarray)
+        if isinstance(var_date_factor, tf.Variable):
+            date_initial_value = var_date_factor.numpy()
+        else:
+            date_initial_value = np.array(var_date_factor, dtype=np.float32)
+
+        if isinstance(var_dow_factor, tf.Variable):
+            dow_initial_value = var_dow_factor.numpy()
+        else:
+            dow_initial_value = np.array(var_dow_factor, dtype=np.float32)
+
+        # Create variables inside the layer (will be automatically tracked by Keras)
+        if not self.frozen_date_factor:
+            self.var_date_factor = self.add_weight(
+                name="var_date_factor",
+                shape=date_initial_value.shape,
+                initializer=tf.constant_initializer(date_initial_value),
+                trainable=True,
+                dtype=tf.float32,
+            )
+        else:
+            # For frozen factors, use constant
+            self.var_date_factor = tf.constant(date_initial_value, dtype=tf.float32)
+
+        if not self.frozen_dow_factor:
+            self.var_dow_factor = self.add_weight(
+                name="var_dow_factor",
+                shape=dow_initial_value.shape,
+                initializer=tf.constant_initializer(dow_initial_value),
+                trainable=True,
+                dtype=tf.float32,
+            )
+        else:
+            # For frozen factors, use constant
+            self.var_dow_factor = tf.constant(dow_initial_value, dtype=tf.float32)
 
     def build(self, input_shape: list[tf.TensorShape]) -> None:
         """Build the layer weights."""
@@ -376,15 +414,6 @@ class PopulationBlock(tf.keras.layers.Layer):
             dtype=np.float32,
             constraint=tf.keras.constraints.NonNeg(),
         )
-
-        # Add trainable variables for date and dow factors
-        trainable_weights = []
-        if not self.frozen_date_factor:
-            trainable_weights.append(self.var_date_factor)
-        if not self.frozen_dow_factor:
-            trainable_weights.append(self.var_dow_factor)
-        if trainable_weights:
-            self.trainable_weights.extend(trainable_weights)
 
         super().build(input_shape)
 

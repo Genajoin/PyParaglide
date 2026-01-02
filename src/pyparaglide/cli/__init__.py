@@ -615,7 +615,6 @@ def _train_spots(
     super_resolution: int,
 ) -> None:
     """Train SPOTS models (one per cell)."""
-    cells_weight_path = Path(models_dir) / "cells.weights.h5"
     trained_count = 0
     skipped_count = 0
 
@@ -650,10 +649,8 @@ def _train_spots(
             X, Y = trainer.prepare_data_for_cell(cell_idx)
 
             # Create model for this cell
+            # NOTE: Initialization and FlyabilityBlock weights are loaded automatically in create_model()
             trainer.create_model(cells=[cell_idx], super_resolution=super_resolution)
-
-            # Load weights from CELLS
-            trainer.load_weights_from_cells(cells_weight_path, freeze_transferred=False)
 
             # Train
             console.print("[yellow]Training...[/yellow]")
