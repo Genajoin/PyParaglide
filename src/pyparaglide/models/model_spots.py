@@ -132,11 +132,12 @@ class ModelSpots:
         ]
 
         # ==============================================================================
-        # Shared flyability block (frozen)
+        # Shared flyability block (transferred from CELLS, but trainable for fine-tuning)
         # ==============================================================================
 
         flyability_model = FlyabilityBlock(other_dim, humidity_dim, name="flyability_block")
-        flyability_model.trainable = False  # Freeze the block (trained from CELLS)
+        # NOTE: Weights will be transferred from CELLS model in Trainer._transfer_flyability_weights()
+        # The block remains trainable to allow fine-tuning for spot-specific patterns
 
         # ==============================================================================
         # Process each cell with its spots

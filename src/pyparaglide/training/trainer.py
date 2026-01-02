@@ -249,6 +249,13 @@ class Trainer:
                 # Use sequential index as key to match input tensor indexing
                 cells_data[sequential_idx] = {"spots": cell_spots}
 
+            # Load initialization factors from trained CELLS model
+            initialization = self._load_initialization_from_cells()
+
+            print(f"[DEBUG] Creating SPOTS model with initialization:")
+            print(f"  date_factor = {initialization['date_factor'].flatten()}")
+            print(f"  dow_factor = {initialization['dow_factor'].flatten()}")
+
             self.model = ModelSpots.create_model(
                 problem_formulation=self.problem_formulation,
                 cells_data=cells_data,
@@ -256,8 +263,11 @@ class Trainer:
                 other_dim=45,
                 humidity_dim=2,
                 nb_altitudes=self.nb_altitudes,
-                initialization={"date_factor": np.array([[1.275]], dtype=np.float32), "dow_factor": np.array([[1.0] * 7], dtype=np.float32).T},
+                initialization=initialization,
             )
+
+            # Transfer FlyabilityBlock weights from CELLS model
+            self._transfer_flyability_weights()
 
         if load_weights:
             self._load_weights(suffix=weight_suffix)
@@ -383,53 +393,64 @@ class Trainer:
             results = {"loss": results}
         return results
 
-    def load_weights_from_cells(
-        self,
-        cells_weight_path: Path,
-        freeze_transferred: bool = True,
-    ) -> None:
+    def _load_initialization_from_cells(self) -> dict:
         """
-        Load shared weights from trained CELLS model into SPOTS model.
+        Load date_factor and dow_factor from trained CELLS model.
 
-        Transfers:
-        - flyability_block (entire submodel)
-        - date_factor (DateBlock)
-        - dow_factor (DayOfWeekBlock)
+        This method extracts the learned date and day-of-week factors from
+        a pre-trained CELLS model to initialize the SPOTS model with the
+        correct values instead of hardcoded defaults.
 
-        Args:
-            cells_weight_path: Path to CELLS.weights.h5
-            freeze_transferred: Whether to freeze transferred layers
+        Returns:
+            Dict with 'date_factor' and 'dow_factor' arrays
 
         Raises:
-            ValueError: If model_type is not SPOTS or model not created
+            FileNotFoundError: If CELLS weights file is not found
         """
-        if self.model_type != ModelType.SPOTS:
-            raise ValueError("Weight transfer only applies to SPOTS model")
+        cells_weight_path = self.models_dir / "cells.weights.h5"
 
-        if self.model is None:
-            raise ValueError("Model must be created before loading weights")
+        if not cells_weight_path.exists():
+            print("[WARNING] CELLS weights not found, using default initialization")
+            print(f"[WARNING] Expected at: {cells_weight_path}")
+            return {
+                "date_factor": np.array([[1.275]], dtype=np.float32),
+                "dow_factor": np.array([[1.0] * 7], dtype=np.float32).T,
+            }
 
-        print(f"[INFO] Loading weights from CELLS model: {cells_weight_path}")
+        print(f"[INFO] Loading initialization from CELLS model: {cells_weight_path}")
 
-        # Determine nb_cells from the weights file (PopulationBlock shape)
-        # PopulationBlock kernel shape = (nb_cells * super_resolution^2, nb_altitudes)
+        # Determine nb_cells from the weights file
         import h5py
-        with h5py.File(cells_weight_path, 'r') as f:
-            # Find any population_block layer and read its kernel shape
-            popu_key = None
-            for key in f['layers'].keys():
-                if 'population_block' in key and 'vars' in f[f'layers/{key}']:
-                    popu_key = f'layers/{key}/vars/0'
+
+        with h5py.File(cells_weight_path, "r") as f:
+            # Find PopulationBlock layer and read its kernel shape
+            # NOTE: kernel is the largest variable (not var_0 which may be date_factor)
+            kernel_shape = None
+            for key in f["layers"].keys():
+                if "population_block" in key and "vars" in f[f"layers/{key}"]:
+                    # Find kernel variable (largest shape)
+                    vars_list = list(f[f"layers/{key}/vars"].keys())
+                    shapes = [f[f"layers/{key}/vars/{v}"].shape for v in vars_list]
+                    # kernel has shape (nb_cells, nb_altitudes), find it by max size
+                    kernel_idx = max(range(len(shapes)), key=lambda i: shapes[i][0] * shapes[i][1] if len(shapes[i]) == 2 else 0)
+                    kernel_shape = shapes[kernel_idx]
                     break
-            if popu_key is None:
-                raise ValueError("Could not find PopulationBlock in weights file")
-            popu_shape = f[popu_key].shape
-            # popu_shape = (nb_cells * super_resolution^2, nb_altitudes)
+
+            if kernel_shape is None:
+                raise ValueError(
+                    "Could not find PopulationBlock kernel in CELLS weights file"
+                )
+
+            # kernel_shape = (nb_cells * super_resolution^2, nb_altitudes)
             # Assuming super_resolution=1 for CELLS model
-            nb_cells_from_weights = popu_shape[0]
-            print(f"[INFO] Detected {nb_cells_from_weights} cells from weights file")
+            nb_cells_from_weights = kernel_shape[0]
+            print(
+                f"[INFO] Detected {nb_cells_from_weights} cells from CELLS weights file (kernel shape: {kernel_shape})"
+            )
 
         # Create temporary CELLS model to load weights
+        from pyparaglide.models.enums import ModelType
+
         temp_trainer = Trainer(
             data_dir=self.data_dir,
             model_type=ModelType.CELLS,
@@ -444,74 +465,104 @@ class Trainer:
         # Load weights - shapes will now match
         temp_trainer.model.load_weights(str(cells_weight_path))
 
-        # Transfer weights for shared layers
-        shared_layer_names = [
-            "flyability_block",
-            "date_factor",
-            "dow_factor",
-        ]
+        # Extract factors from PopulationBlock
+        try:
+            cells_pop = temp_trainer.model.get_layer("population_block")
+        except ValueError:
+            # Try alternative name (for multi-output models)
+            cells_pop = temp_trainer.model.get_layer("population_block_flown")
 
-        for layer_name in shared_layer_names:
-            try:
-                if layer_name == "flyability_block":
-                    cells_layer = temp_trainer.model.get_layer(layer_name)
-                    spots_layer = self.model.get_layer(layer_name)
-                    spots_layer.set_weights(cells_layer.get_weights())
-                    print(f"[INFO] Transferred weights for layer: {layer_name}")
-                elif layer_name in ["date_factor", "dow_factor"]:
-                    # These are inside PopulationBlock in both models
-                    # Extract from first population block in CELLS model
-                    cells_pop_block = temp_trainer.model.get_layer("population_block_flown")
-                    
-                    # Find corresponding layer in SPOTS model (it's named population__cell_{id})
-                    # For weight transfer during creation, we usually have only one cell in the list
-                    spots_pop_layer = None
-                    for layer in self.model.layers:
-                        if layer.name.startswith("population__cell_"):
-                            spots_pop_layer = layer
-                            break
-                    
-                    if spots_pop_layer and hasattr(cells_pop_block, layer_name) and hasattr(spots_pop_layer, layer_name):
-                        val = getattr(cells_pop_block, layer_name)
-                        # If it's a variable, get value
-                        if hasattr(val, "numpy"):
-                            val = val.numpy()
-                        
-                        # Set in SPOTS layer (it might be a constant or variable)
-                        # Since we can't easily set_weights on individual attributes if they are not tracked as weights,
-                        # we check if they are in trainable_weights
-                        target_attr = getattr(spots_pop_layer, layer_name)
-                        if hasattr(target_attr, "assign"):
-                            target_attr.assign(val)
-                        else:
-                            setattr(spots_pop_layer, layer_name, tf.constant(val))
-                        
-                        print(f"[INFO] Transferred {layer_name} from CELLS population_block to SPOTS {spots_pop_layer.name}")
+        date_factor = cells_pop.var_date_factor.numpy()
+        dow_factor = cells_pop.var_dow_factor.numpy()
 
-                # Optionally freeze
-                if freeze_transferred:
-                    try:
-                        layer_to_freeze = self.model.get_layer(layer_name)
-                        layer_to_freeze.trainable = False
-                        print(f"[INFO] Frozen layer: {layer_name}")
-                    except ValueError:
-                        # date_factor/dow_factor are handled inside population block
-                        pass
-            except Exception as e:
-                print(f"[WARNING] Could not transfer {layer_name}: {e}")
+        print(f"[INFO] Loaded initialization from CELLS model:")
+        print(f"  date_factor: {date_factor.flatten()}")
+        print(f"  dow_factor: {dow_factor.flatten()}")
 
-        print("[INFO] Weight transfer complete")
+        # Clear the temporary model from memory
+        tf.keras.backend.clear_session()
 
-        # Recompile model after freezing layers
-        if freeze_transferred:
-            self.model.compile(
-                optimizer="adam",
-                loss=(
-                    "binary_crossentropy"
-                    if self.problem_formulation == ProblemFormulation.CLASSIFICATION
-                    else "mse"
-                ),
+        return {
+            "date_factor": date_factor,
+            "dow_factor": dow_factor,
+        }
+
+    def _transfer_flyability_weights(self) -> None:
+        """
+        Transfer FlyabilityBlock weights from CELLS to SPOTS model.
+
+        This method loads the trained FlyabilityBlock weights from a CELLS model
+        and applies them to the SPOTS model. This provides a better starting point
+        than random initialization.
+
+        Note: This method should be called after creating the SPOTS model but before
+        training it.
+
+        Raises:
+            FileNotFoundError: If CELLS weights file is not found
+        """
+        cells_weight_path = self.models_dir / "cells.weights.h5"
+
+        if not cells_weight_path.exists():
+            print(
+                "[WARNING] CELLS weights not found, FlyabilityBlock uses random initialization"
             )
+            print(f"[WARNING] Expected at: {cells_weight_path}")
+            return
+
+        print(
+            f"[INFO] Transferring FlyabilityBlock weights from: {cells_weight_path}"
+        )
+
+        # Reuse the code from _load_initialization_from_cells to avoid duplication
+        import h5py
+
+        with h5py.File(cells_weight_path, "r") as f:
+            # Find PopulationBlock kernel to determine nb_cells
+            # NOTE: Use kernel (largest variable), not var_0 which may be date_factor
+            kernel_shape = None
+            for key in f["layers"].keys():
+                if "population_block" in key and "vars" in f[f"layers/{key}"]:
+                    # Find kernel variable (largest shape)
+                    vars_list = list(f[f"layers/{key}/vars"].keys())
+                    shapes = [f[f"layers/{key}/vars/{v}"].shape for v in vars_list]
+                    kernel_idx = max(range(len(shapes)), key=lambda i: shapes[i][0] * shapes[i][1] if len(shapes[i]) == 2 else 0)
+                    kernel_shape = shapes[kernel_idx]
+                    break
+
+            if kernel_shape is None:
+                print("[WARNING] Could not detect nb_cells from weights file")
+                return
+
+            nb_cells_from_weights = kernel_shape[0]
+
+        # Create temporary CELLS model
+        from pyparaglide.models.enums import ModelType
+
+        temp_trainer = Trainer(
+            data_dir=self.data_dir,
+            model_type=ModelType.CELLS,
+            problem_formulation=self.problem_formulation,
+            models_dir=self.models_dir,
+        )
+
+        cells_to_load = list(range(nb_cells_from_weights))
+        temp_trainer.create_model(cells=cells_to_load)
+        temp_trainer.model.load_weights(str(cells_weight_path))
+
+        # Transfer FlyabilityBlock weights
+        try:
+            cells_flyability = temp_trainer.model.get_layer("flyability_block")
+            spots_flyability = self.model.get_layer("flyability_block")
+
+            spots_flyability.set_weights(cells_flyability.get_weights())
+            print("[INFO] Transferred FlyabilityBlock weights from CELLS")
+
+        except ValueError as e:
+            print(f"[WARNING] Could not transfer FlyabilityBlock weights: {e}")
+
+        # Clear the temporary model from memory
+        tf.keras.backend.clear_session()
 
     def prepare_data_for_cell(self, cell_index: int) -> tuple:
         """

@@ -241,7 +241,7 @@ class BuildMeteoPhase:
             grib_params.append((param, [('entireAtmosphere', 0), ('atmosphereSingleLayer', 0), ('unknown', 0)]))
 
         pressure_levels = [1000, 900, 800, 700, 600, 500, 400, 300, 200]
-        for param in ['Vertical velocity', 'Geopotential Height', 'Absolute vorticity',
+        for param in ['Vertical velocity', 'Geopotential height', 'Absolute vorticity',
                       'Temperature', 'Relative humidity', 'U component of wind', 'V component of wind']:
             for level in pressure_levels:
                 grib_params.append((param, [('isobaricInhPa', level)]))
