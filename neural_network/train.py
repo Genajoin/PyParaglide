@@ -29,6 +29,10 @@ class MyTrainingLogger(tf.keras.callbacks.Callback):
 
 	@staticmethod
 	def strcomp(val, valref):
+		# Handle NaN values (can happen with very small datasets)
+		if np.isnan(val) or np.isnan(valref) or valref == 0:
+			return "\033[93m  NaN\033[0m"
+
 		ratio = val/valref
 		if ratio <= 1.:
 			color = "\033[92m"
@@ -91,7 +95,7 @@ class MyTrainingLogger(tf.keras.callbacks.Callback):
 
 class Train:
 
-	def __init__(self, models_directory, model_type, problem_formulation):
+	def __init__(self, models_directory, model_type, problem_formulation, nb_cells=None):
 
 		self.model_type          = model_type
 		self.problem_formulation = problem_formulation
@@ -99,7 +103,14 @@ class Train:
 		# Params
 		self.wind_dim         = 8
 		self.nb_altitudes     = 5
-		self.all_cells        = [c for c in range(80)]
+
+		# Determine nb_cells from data if not explicitly provided
+		if nb_cells is None:
+			from inc.dataset import DatasetParams
+			dataset_params = DatasetParams()
+			nb_cells = dataset_params.nb_cells
+
+		self.all_cells        = [c for c in range(nb_cells)]
 		self.models_directory = models_directory
 
 		# model
@@ -278,9 +289,9 @@ class Train:
 
 		if self.model_type == ModelType.CELLS:
 			if train_crossability_only:
-				train.trained_model.freeze_all_but_crossability()
+				self.trained_model.freeze_all_but_crossability()
 			else:
-				train.trained_model.unfreeze_all()
+				self.trained_model.unfreeze_all()
 
 		#===================================================================
 		# Training/validation set split
@@ -344,7 +355,11 @@ class Train:
 
 if __name__ == "__main__":
 
-	nb_cells = 80
+	# Determine nb_cells from data instead of hardcoding
+	from inc.dataset import DatasetParams
+	dataset_params = DatasetParams()
+	nb_cells = dataset_params.nb_cells
+
 	problem_formulation = ProblemFormulation.CLASSIFICATION
 
 	model_dir = "./bin/models/%s_2.0.0" % str(problem_formulation).split(".")[-1]
@@ -363,7 +378,7 @@ if __name__ == "__main__":
 		# Run multiple trainings
 		val_losses = []
 		for m in range(nb_trainings):
-			train.set_trained(range(55), super_resolution=1, load_weights=False)
+			train.set_trained(range(0, nb_cells), super_resolution=1, load_weights=False)
 			val_losses += [train.train(lr_schedules[0], use_validation_set=True)]
 			train.save()
 			Utils.move_dir(model_dir, cur_model_dir+str(m))
@@ -375,7 +390,7 @@ if __name__ == "__main__":
 
 		# Re-train best with all samples
 		train = Train(model_dir, ModelType.CELLS, problem_formulation)
-		train.set_trained(range(55), super_resolution=1, load_weights=True)
+		train.set_trained(range(0, nb_cells), super_resolution=1, load_weights=True)
 		train.train(lr_schedules[1], use_validation_set=False)
 
 		train.save()

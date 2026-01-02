@@ -203,7 +203,7 @@ class GridLatLon:
             jsonBody += "}"
 
 
-        jsonBody += "]}"
+        jsonBody += "]]}"
 
 
         with open(filename, "w") as text_file:
@@ -240,7 +240,7 @@ class GridLatLon:
                                                                                                lon+self.resolutionLon/2., lat+self.resolutionLat/2.,
                                                                                                lon-self.resolutionLon/2., lat+self.resolutionLat/2.,
                                                                                                lon-self.resolutionLon/2., lat-self.resolutionLat/2.)
-        geojsonFoot = "]}"
+        geojsonFoot = "]]}"
 
         with open(filename, "w") as text_file:
             text_file.write(geojsonHead + geojsonBody + geojsonFoot)
@@ -338,7 +338,7 @@ class GridLatLon:
         js += "\"nbChiffres\": %d,\n" % nbChiffres
         js += "\"nbVals\": %d,\n"     % nbVals
 
-        js += "\"data\": \""
+        js += "\"data\": "
 
         for row in range(cellTopLeft[0], cellTopLeft[0]+nrows):
             for col in range(cellTopLeft[1], cellTopLeft[1]+ncols):
@@ -351,7 +351,7 @@ class GridLatLon:
                     val = int(round(cellValFnt(self.data[row][col], *args)*100.0))
                     js += self.encodeValue([val], minVal, maxVal, nbChiffres)
                     
-        js += "\"\n"
+        js += "\n"
         js += "}"
 
         with open(filename, "w") as text_file:
@@ -418,7 +418,7 @@ class GridLatLon:
         effectiveBBoxLatLonMercator = BBoxLatLon(self.latEquiToMercator(effectiveBBoxLatLon.minLat), self.latEquiToMercator(effectiveBBoxLatLon.maxLat), effectiveBBoxLatLon.minLon, effectiveBBoxLatLon.maxLon)
 
         # bounding box
-        print("[[%f,%f],[%f,%f]]" % (effectiveBBoxLatLon.minLat, effectiveBBoxLatLon.minLon, effectiveBBoxLatLon.maxLat, effectiveBBoxLatLon.maxLon))
+        print("[[" + str(effectiveBBoxLatLon.minLat) + "," + str(effectiveBBoxLatLon.minLon) + "],[" + str(effectiveBBoxLatLon.maxLat) + "," + str(effectiveBBoxLatLon.maxLon) + "]]")
 
         height = (effectiveBBoxLatLon.maxLat-effectiveBBoxLatLon.minLat)
         geojsonHead  = "<svg width=\"%f\" height=\"%f\" xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\">\n" % (effectiveBBoxLatLon.maxLon-effectiveBBoxLatLon.minLon, height)
@@ -484,7 +484,7 @@ class GridLatLon:
 
 
     def __str__(self):
-        return self.__class__.__name__ +"["+ str(len(self.data)) +"]["+ str(len(self.data[0])) +"]"
+        return self.__class__.__name__ +"["+ str(len(self.data)) +"][ "+ str(len(self.data[0])) +"]"
 
 
 #================================================================================
@@ -582,4 +582,3 @@ class GridLatLonTime(GridLatLon):
 
     def export_json(self, filename, cellValFnt, bBoxLatLon = None, bBoxTime = None, *args):
         return GridLatLon.export_json(self, filename, self.filterTime, bBoxLatLon, (bBoxTime, cellValFnt))
-

@@ -93,8 +93,10 @@ class Utils:
 
 	@staticmethod
 	def apply_normalization(X, normalization_mean, normalization_std):
+		safe_std = normalization_std.copy()
+		safe_std[safe_std == 0] = 1.0
 		for d in range(X.shape[0]):
-			X[d, :] = (X[d, :] - normalization_mean.transpose()) / normalization_std.transpose()
+			X[d, :] = (X[d, :] - normalization_mean.transpose()) / safe_std.transpose()
 
 	#=======================================================================
 	#

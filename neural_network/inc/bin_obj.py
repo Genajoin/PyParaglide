@@ -5,13 +5,13 @@ class BinObj():
 	obj_path = "./bin/data"
 
 	@classmethod
-	def save(cls, obj, name, path=None):
+	def save(cls, obj, name, path=None, protocol=4):
 		if not path:
 			path = cls.obj_path
 
 		os.makedirs(path, exist_ok=True)
 		with open(os.path.join(path, name) + '.pkl', 'wb') as f:
-			pickle.dump(obj, f, pickle.HIGHEST_PROTOCOL)
+			pickle.dump(obj, f, protocol)
 
 	@classmethod
 	def load(cls, name, path=None):

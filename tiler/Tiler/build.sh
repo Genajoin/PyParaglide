@@ -1,1 +1,0 @@
-qmake Tiler.pro; make
