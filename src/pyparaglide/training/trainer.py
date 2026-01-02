@@ -72,20 +72,40 @@ class Trainer:
             cells = list(range(self.nb_cells))
 
         # Load weather data
-        X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
-        X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h])) for h in range(3)]
-        X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
+        # For SPOTS: meteo data is not organized by cells, use all data (nb_days, dim)
+        # For CELLS: meteo data is organized as (nb_cells * nb_days, dim)
+        if self.model_type == ModelType.SPOTS:
+            # Use range(nb_cells) to get all data, then we'll filter in _prepare_inputs
+            X_other = [self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_other[h]) for h in range(3)]
+            X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_wind[h])) for h in range(3)]
+            X_humidity = [self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_humidity[h]) for h in range(3)]
+        else:
+            X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
+            X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h])) for h in range(3)]
+            X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
 
-        # Compute and save normalization (based on hour 1 = 12h)
-        norm_mean_other, norm_std_other = compute_normalization_coeffs(X_other[1])
-        norm_mean_hum, norm_std_hum = compute_normalization_coeffs(X_humidity[1])
+        # Compute or load normalization
+        # For SPOTS, we MUST use the normalization from the CELLS model
+        norm_path = self.models_dir / "normalization_cells.pkl"
+        if self.model_type == ModelType.SPOTS and norm_path.exists():
+            print(f"[INFO] Loading normalization from {norm_path}")
+            self.normalization = Normalization.load(norm_path)
+            norm_mean_other = self.normalization.other_mean
+            norm_std_other = self.normalization.other_std
+            norm_mean_hum = self.normalization.humidity_mean
+            norm_std_hum = self.normalization.humidity_std
+        else:
+            # Compute normalization (based on hour 1 = 12h)
+            print("[INFO] Computing normalization from data")
+            norm_mean_other, norm_std_other = compute_normalization_coeffs(X_other[1])
+            norm_mean_hum, norm_std_hum = compute_normalization_coeffs(X_humidity[1])
 
-        self.normalization = Normalization(
-            other_mean=norm_mean_other,
-            other_std=norm_std_other,
-            humidity_mean=norm_mean_hum,
-            humidity_std=norm_std_hum,
-        )
+            self.normalization = Normalization(
+                other_mean=norm_mean_other,
+                other_std=norm_std_other,
+                humidity_mean=norm_mean_hum,
+                humidity_std=norm_std_hum,
+            )
 
         # Apply normalization
         for h in range(3):
@@ -133,50 +153,56 @@ class Trainer:
         # Day of week (nb_days, 7)
         X_dow = self.dataset.get_dow()
 
-        # Mountainess (nb_days, nb_cells, nb_altitudes)
-        mountainess = self.dataset.get_mountainess(cells, self.nb_altitudes)
-        X_mountainess = np.repeat(mountainess[np.newaxis, :, :], self.nb_days, axis=0)
+        # Mountainess (nb_days, nb_cells, nb_altitudes) - only used for CELLS
+        if self.model_type == ModelType.CELLS:
+            mountainess = self.dataset.get_mountainess(cells, self.nb_altitudes)
+            X_mountainess = np.repeat(mountainess[np.newaxis, :, :], self.nb_days, axis=0)
 
-        # Other weather (nb_days, nb_cells, 3, dim_other)
+        # Initialize stacked arrays
         dim_other = X_other[0].shape[1]
         X_other_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_other), dtype=np.float32)
-        for h in range(3):
-            for i, cell in enumerate(cells):
-                if self.model_type == ModelType.CELLS:
-                    # For CELLS: data is stored in (nb_cells * nb_days, dim) format
-                    start_idx = cell * self.nb_days
-                    X_other_stacked[:, i, h, :] = X_other[h][start_idx : start_idx + self.nb_days, :]
-                else:
-                    # For SPOTS (per-cell): data is already (nb_days, dim) format
-                    X_other_stacked[:, i, h, :] = X_other[h]
-
-        # Humidity (nb_days, nb_cells, 3, dim_humidity)
+        
         dim_humidity = X_humidity[0].shape[1]
         X_humidity_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_humidity), dtype=np.float32)
+        
+        X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, self.nb_altitudes, 3, self.wind_dim), dtype=np.float32)
+
         for h in range(3):
             for i, cell in enumerate(cells):
+                # Calculate start index based on how data was loaded
+                # CELLS: data loaded for requested `cells` only -> index i
+                # SPOTS: data loaded for ALL cells (range(nb_cells)) -> index cell
                 if self.model_type == ModelType.CELLS:
-                    start_idx = cell * self.nb_days
-                    X_humidity_stacked[:, i, h, :] = X_humidity[h][start_idx : start_idx + self.nb_days, :]
+                    start_idx = i * self.nb_days
                 else:
-                    # For SPOTS (per-cell): data is already (nb_days, dim) format
-                    X_humidity_stacked[:, i, h, :] = X_humidity[h]
+                    start_idx = cell * self.nb_days
+                
+                end_idx = start_idx + self.nb_days
+                
+                # Safety check for data availability
+                if end_idx > X_other[h].shape[0]:
+                    raise ValueError(f"Not enough weather data for cell {cell}. Expected range {start_idx}:{end_idx}, but data has only {X_other[h].shape[0]} rows.")
 
-        # Wind (nb_days, nb_cells, nb_altitudes, 3, wind_dim)
-        X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, self.nb_altitudes, 3, self.wind_dim), dtype=np.float32)
-        for h in range(3):
-            if self.model_type == ModelType.CELLS:
-                wind_reshaped = X_wind[h].reshape(self.nb_days, nb_cells_model, self.nb_altitudes, self.wind_dim)
-            else:
-                # For SPOTS (per-cell): reshape to (nb_days, 1, nb_altitudes, wind_dim)
-                wind_reshaped = X_wind[h].reshape(self.nb_days, 1, self.nb_altitudes, self.wind_dim)
-            X_wind_stacked[:, :, :, h, :] = wind_reshaped
+                # Other weather
+                X_other_stacked[:, i, h, :] = X_other[h][start_idx : end_idx, :]
+
+                # Humidity
+                X_humidity_stacked[:, i, h, :] = X_humidity[h][start_idx : end_idx, :]
+
+                # Wind
+                # Extract wind for this cell (nb_days, alt*dim)
+                wind_cell = X_wind[h][start_idx : end_idx, :]
+                # Reshape to (nb_days, alt, dim)
+                wind_reshaped = wind_cell.reshape(self.nb_days, self.nb_altitudes, self.wind_dim)
+                # Assign to stacked array
+                X_wind_stacked[:, i, :, h, :] = wind_reshaped
 
         # For SPOTS single-cell training: squeeze cell dimension to match model input shapes
-        if self.model_type == ModelType.SPOTS and nb_cells_model == 1:
-            X_other_stacked = X_other_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
-            X_humidity_stacked = X_humidity_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
-            X_wind_stacked = X_wind_stacked[:, 0, :, :, :]  # (nb_days, 1, nb_altitudes, 3, wind_dim) -> (nb_days, nb_altitudes, 3, wind_dim)
+        if self.model_type == ModelType.SPOTS:
+            if nb_cells_model == 1:
+                X_other_stacked = X_other_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
+                X_humidity_stacked = X_humidity_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
+                X_wind_stacked = X_wind_stacked[:, 0, :, :, :]  # (nb_days, 1, nb_altitudes, 3, wind_dim) -> (nb_days, nb_altitudes, 3, wind_dim)
             # Note: SPOTS model doesn't use mountainess, so don't include it
             return [X_date, X_dow, X_other_stacked, X_humidity_stacked, X_wind_stacked]
 
@@ -197,6 +223,7 @@ class Trainer:
         else:
             # SPOTS model
             spots_data = self.dataset.get_flights_by_spots(cells)
+            # Stack along axis=1 gives (nb_days, n_spots)
             return [np.stack([spots_data[c][s] for s in range(len(spots_data[c]))], axis=1, dtype=np.float32) for c in cells if len(spots_data[c]) > 0]
 
     def create_model(
@@ -204,6 +231,7 @@ class Trainer:
         cells: list[int],
         super_resolution: int = 1,
         load_weights: bool = False,
+        weight_suffix: str = "",
     ) -> None:
         """
         Create and optionally load model weights.
@@ -212,6 +240,7 @@ class Trainer:
             cells: List of cell indices
             super_resolution: Super-resolution factor
             load_weights: Whether to load existing weights
+            weight_suffix: Optional suffix for weight file
         """
         tf.keras.backend.clear_session()
 
@@ -248,12 +277,13 @@ class Trainer:
             )
 
         if load_weights:
-            self._load_weights()
+            self._load_weights(suffix=weight_suffix)
 
-    def _load_weights(self) -> None:
+    def _load_weights(self, suffix: str = "") -> None:
         """Load model weights from directory."""
         # Try to load weights
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}_.weights.h5"
+        model_name = self.model_type.name.lower()
+        weight_path = self.models_dir / f"{model_name}{suffix}.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded weights from {weight_path}")
@@ -398,6 +428,24 @@ class Trainer:
 
         print(f"[INFO] Loading weights from CELLS model: {cells_weight_path}")
 
+        # Determine nb_cells from the weights file (PopulationBlock shape)
+        # PopulationBlock kernel shape = (nb_cells * super_resolution^2, nb_altitudes)
+        import h5py
+        with h5py.File(cells_weight_path, 'r') as f:
+            # Find any population_block layer and read its kernel shape
+            popu_key = None
+            for key in f['layers'].keys():
+                if 'population_block' in key and 'vars' in f[f'layers/{key}']:
+                    popu_key = f'layers/{key}/vars/0'
+                    break
+            if popu_key is None:
+                raise ValueError("Could not find PopulationBlock in weights file")
+            popu_shape = f[popu_key].shape
+            # popu_shape = (nb_cells * super_resolution^2, nb_altitudes)
+            # Assuming super_resolution=1 for CELLS model
+            nb_cells_from_weights = popu_shape[0]
+            print(f"[INFO] Detected {nb_cells_from_weights} cells from weights file")
+
         # Create temporary CELLS model to load weights
         temp_trainer = Trainer(
             data_dir=self.data_dir,
@@ -406,12 +454,11 @@ class Trainer:
             models_dir=self.models_dir,
         )
 
-        # Get same cell configuration
-        # Use only 1 cell for temp CELLS model (weights file might have been trained with 1 cell)
-        # The number of cells doesn't matter for weight transfer since we only need shared layers
-        cells_to_load = [0]  # Single cell to match weights file structure
+        # Create temp model with the same nb_cells as in the weights file
+        cells_to_load = list(range(nb_cells_from_weights))
         temp_trainer.create_model(cells=cells_to_load)
 
+        # Load weights - shapes will now match
         temp_trainer.model.load_weights(str(cells_weight_path))
 
         # Transfer weights for shared layers
@@ -423,18 +470,51 @@ class Trainer:
 
         for layer_name in shared_layer_names:
             try:
-                cells_layer = temp_trainer.model.get_layer(layer_name)
-                spots_layer = self.model.get_layer(layer_name)
-
-                # Transfer weights
-                spots_layer.set_weights(cells_layer.get_weights())
-                print(f"[INFO] Transferred weights for layer: {layer_name}")
+                if layer_name == "flyability_block":
+                    cells_layer = temp_trainer.model.get_layer(layer_name)
+                    spots_layer = self.model.get_layer(layer_name)
+                    spots_layer.set_weights(cells_layer.get_weights())
+                    print(f"[INFO] Transferred weights for layer: {layer_name}")
+                elif layer_name in ["date_factor", "dow_factor"]:
+                    # These are inside PopulationBlock in both models
+                    # Extract from first population block in CELLS model
+                    cells_pop_block = temp_trainer.model.get_layer("population_block_flown")
+                    
+                    # Find corresponding layer in SPOTS model (it's named population__cell_{id})
+                    # For weight transfer during creation, we usually have only one cell in the list
+                    spots_pop_layer = None
+                    for layer in self.model.layers:
+                        if layer.name.startswith("population__cell_"):
+                            spots_pop_layer = layer
+                            break
+                    
+                    if spots_pop_layer and hasattr(cells_pop_block, layer_name) and hasattr(spots_pop_layer, layer_name):
+                        val = getattr(cells_pop_block, layer_name)
+                        # If it's a variable, get value
+                        if hasattr(val, "numpy"):
+                            val = val.numpy()
+                        
+                        # Set in SPOTS layer (it might be a constant or variable)
+                        # Since we can't easily set_weights on individual attributes if they are not tracked as weights,
+                        # we check if they are in trainable_weights
+                        target_attr = getattr(spots_pop_layer, layer_name)
+                        if hasattr(target_attr, "assign"):
+                            target_attr.assign(val)
+                        else:
+                            setattr(spots_pop_layer, layer_name, tf.constant(val))
+                        
+                        print(f"[INFO] Transferred {layer_name} from CELLS population_block to SPOTS {spots_pop_layer.name}")
 
                 # Optionally freeze
                 if freeze_transferred:
-                    spots_layer.trainable = False
-                    print(f"[INFO] Frozen layer: {layer_name}")
-            except ValueError as e:
+                    try:
+                        layer_to_freeze = self.model.get_layer(layer_name)
+                        layer_to_freeze.trainable = False
+                        print(f"[INFO] Frozen layer: {layer_name}")
+                    except ValueError:
+                        # date_factor/dow_factor are handled inside population block
+                        pass
+            except Exception as e:
                 print(f"[WARNING] Could not transfer {layer_name}: {e}")
 
         print("[INFO] Weight transfer complete")
