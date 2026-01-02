@@ -112,12 +112,20 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon):
 
             # Validate data length
             expected_len = len(grib_params) * len(cells_latlon)
-            if values is None or len(values) != expected_len:
+            if values is None:
+                print(f"[WARNING] {day_date} {hour}:00 - GRIB reader returned None")
                 hourly_queue.put((day_date, hour, None))
+            elif len(values) != expected_len:
+                actual = len(values)
+                missing = expected_len - actual
+                print(f"[WARNING] {day_date} {hour}:00 - Got {actual}/{expected_len} values ({missing} missing)")
+                # Still send what we have instead of None!
+                hourly_queue.put((day_date, hour, values))
             else:
                 hourly_queue.put((day_date, hour, values))
 
-        except Exception:
+        except Exception as e:
+            print(f"[ERROR] {day_date} {hour}:00 - {type(e).__name__}: {str(e)[:100]}")
             hourly_queue.put((day_date, hour, None))
         finally:
             if grb_reader:
