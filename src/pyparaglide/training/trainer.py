@@ -461,7 +461,12 @@ class Trainer:
                 elif layer_name in ["date_factor", "dow_factor"]:
                     # These are inside PopulationBlock in both models
                     # Extract from first population block in CELLS model
-                    cells_pop_block = temp_trainer.model.get_layer("population_block_flown")
+                    # Refactored: now use shared 'population_block' instead of 'population_block_flown'
+                    try:
+                        cells_pop_block = temp_trainer.model.get_layer("population_block")
+                    except ValueError:
+                        # Fallback for old weights compatibility if needed
+                        cells_pop_block = temp_trainer.model.get_layer("population_block_flown")
                     
                     # Find corresponding layer in SPOTS model (it's named population__cell_{id})
                     # For weight transfer during creation, we usually have only one cell in the list
