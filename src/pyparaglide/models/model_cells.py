@@ -147,33 +147,12 @@ class ModelCells:
 
         # Create separate population blocks for each output
         # (Original uses single block, but requires all inputs to have same shape)
-        population_block_flown = PopulationBlock(
+        population_block = PopulationBlock(
             problem_formulation,
             var_date_factor,
             var_dow_factor,
             super_resolution,
-            name="population_block_flown",
-        )
-        population_block_crossed = PopulationBlock(
-            problem_formulation,
-            var_date_factor,
-            var_dow_factor,
-            super_resolution,
-            name="population_block_crossed",
-        )
-        population_block_wind = PopulationBlock(
-            problem_formulation,
-            var_date_factor,
-            var_dow_factor,
-            super_resolution,
-            name="population_block_wind",
-        )
-        population_block_humidity = PopulationBlock(
-            problem_formulation,
-            var_date_factor,
-            var_dow_factor,
-            super_resolution,
-            name="population_block_humidity",
+            name="population_block",
         )
 
         # ==============================================================================
@@ -199,10 +178,10 @@ class ModelCells:
         # Apply population (separate blocks for each output)
         # ==============================================================================
 
-        flown_prediction = population_block_flown([flyability_prediction, input_date, input_dow])
-        crossed_prediction = population_block_crossed([crossability_prediction, input_date, input_dow])
-        wind_flown_prediction = population_block_wind([wind_flyability_prediction, input_date, input_dow])
-        humidity_flown_prediction = population_block_humidity([humidity_flyability_prediction, input_date, input_dow])
+        flown_prediction = population_block([flyability_prediction, input_date, input_dow])
+        crossed_prediction = population_block([crossability_prediction, input_date, input_dow])
+        wind_flown_prediction = population_block([wind_flyability_prediction, input_date, input_dow])
+        humidity_flown_prediction = population_block([humidity_flyability_prediction, input_date, input_dow])
 
         # ==============================================================================
         # Create model
