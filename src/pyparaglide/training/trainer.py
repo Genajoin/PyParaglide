@@ -11,6 +11,7 @@ import numpy as np
 import tensorflow as tf
 
 from pyparaglide.data import Dataset, Normalization
+from pyparaglide.data.dataset import convert_wind_matrix
 from pyparaglide.data.normalization import apply_normalization, compute_normalization_coeffs
 from pyparaglide.models import ModelCells, ModelSpots, ModelType, ProblemFormulation
 from pyparaglide.training.callbacks import LearningRateScheduler, TrainingLogger
@@ -77,11 +78,11 @@ class Trainer:
         if self.model_type == ModelType.SPOTS:
             # Use range(nb_cells) to get all data, then we'll filter in _prepare_inputs
             X_other = [self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_other[h]) for h in range(3)]
-            X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_wind[h])) for h in range(3)]
+            X_wind = [convert_wind_matrix(self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_wind[h]), self.wind_dim) for h in range(3)]
             X_humidity = [self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_humidity[h]) for h in range(3)]
         else:
             X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
-            X_wind = [self._convert_wind(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h])) for h in range(3)]
+            X_wind = [convert_wind_matrix(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h]), self.wind_dim) for h in range(3)]
             X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
 
         # Compute or load normalization
@@ -117,24 +118,6 @@ class Trainer:
         Y = self._prepare_outputs(cells, super_resolution)
 
         return X, Y
-
-    def _convert_wind(self, wind_matrix: np.ndarray) -> np.ndarray:
-        """Convert wind matrix to direction encoding."""
-        # Simplified wind encoding (8 directions × 5 altitudes)
-        nb_samples = wind_matrix.shape[0]
-        result = np.zeros((nb_samples, self.nb_altitudes, self.wind_dim), dtype=np.float32)
-
-        # Encode U/V components into direction bins
-        for i in range(nb_samples):
-            for alt in range(self.nb_altitudes):
-                if alt * 2 + 1 < wind_matrix.shape[1]:
-                    u = wind_matrix[i, alt * 2]
-                    v = wind_matrix[i, alt * 2 + 1]
-                    # Simple encoding: magnitude in first bin
-                    result[i, alt, 0] = np.sqrt(u * u + v * v)
-                    # Direction could be computed from arctan2(v, u)
-
-        return result.reshape(nb_samples, self.nb_altitudes * self.wind_dim)
 
     def _prepare_inputs(
         self,

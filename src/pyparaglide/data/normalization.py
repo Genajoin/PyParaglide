@@ -64,3 +64,43 @@ def apply_normalization(data: np.ndarray, mean: np.ndarray, std: np.ndarray) -> 
         Normalized data
     """
     return (data - mean) / std
+
+
+def wind_uv_to_direction_bins(uv: np.ndarray, n_bins: int = 8) -> np.ndarray:
+    """
+    Convert U,V wind components to n-direction bins.
+
+    This matches the original implementation in neural_network/inc/utils.py:55-71.
+
+    Args:
+        uv: (nb_samples, 2) array with U,V components
+        n_bins: Number of direction bins (default 8 for N, NE, E, SE, S, SW, W, NW)
+
+    Returns:
+        (nb_samples, n_bins) array with magnitude in the direction bin
+
+    Direction mapping (n_bins=8):
+        0 = East (u>0, v=0)
+        1 = Northeast
+        2 = North (u=0, v>0)
+        3 = Northwest
+        4 = West (u<0, v=0)
+        5 = Southwest
+        6 = South (u=0, v<0)
+        7 = Southeast
+    """
+    import math
+
+    nb_samples = uv.shape[0]
+    u, v = uv[:, 0], uv[:, 1]
+
+    # Calculate angle: arctan2(v, u) gives angle from East, CCW
+    # Map to [0, n_bins) and shift by n_bins//2 to align East with bin 0
+    angle = np.mod((np.around(np.arctan2(v, u) / (2.0 * math.pi) * n_bins) + n_bins // 2).astype(int), n_bins)
+
+    # Result array with magnitude in direction bin
+    result = np.zeros((nb_samples, n_bins), dtype=np.float32)
+    magnitude = np.sqrt(u * u + v * v)
+    result[np.arange(nb_samples), angle] = magnitude
+
+    return result
