@@ -195,3 +195,38 @@ class TestWindDirectionEncoding:
 
         # Check first sample, second altitude (North wind -> bin 6)
         np.testing.assert_array_almost_equal(result[0, 8 + 6], 10.0)
+
+    def test_wind_encoding_not_all_in_bin_0(self):
+        """
+        Regression test: ensure different wind directions map to different bins.
+
+        This test prevents the bug where all wind magnitudes were placed in bin 0,
+        losing all direction information.
+        """
+        # Create wind vectors in different directions
+        uv = np.array([
+            [10.0, 0.0],   # East
+            [0.0, 10.0],   # North
+            [-10.0, 0.0],  # West
+            [0.0, -10.0],  # South
+            [7.0, 7.0],    # Northeast
+        ], dtype=np.float32)
+
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Find which bin has the magnitude for each sample
+        active_bins = [np.argmax(result[i]) for i in range(len(uv))]
+
+        # All active bins should be different (direction information preserved)
+        assert len(set(active_bins)) == len(active_bins), \
+            f"Wind directions not uniquely encoded! Active bins: {active_bins}"
+
+        # Specifically, bin 0 should NOT be active for all (the bug we're preventing)
+        assert active_bins.count(0) <= 1, \
+            f"All wind vectors in bin 0! Direction info lost. Active bins: {active_bins}"
+
+        # Each sample should have magnitude in exactly one bin
+        for i in range(len(uv)):
+            non_zero_bins = np.sum(result[i] > 0)
+            assert non_zero_bins == 1, \
+                f"Sample {i} has magnitude in {non_zero_bins} bins, expected 1"
