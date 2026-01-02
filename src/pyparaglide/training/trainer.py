@@ -461,37 +461,32 @@ class Trainer:
                 elif layer_name in ["date_factor", "dow_factor"]:
                     # These are inside PopulationBlock in both models
                     # Extract from first population block in CELLS model
-                    # Refactored: now use shared 'population_block' instead of 'population_block_flown'
                     try:
                         cells_pop_block = temp_trainer.model.get_layer("population_block")
                     except ValueError:
-                        # Fallback for old weights compatibility if needed
                         cells_pop_block = temp_trainer.model.get_layer("population_block_flown")
                     
-                    # Find corresponding layer in SPOTS model (it's named population__cell_{id})
-                    # For weight transfer during creation, we usually have only one cell in the list
+                    # Find corresponding layer in SPOTS model
                     spots_pop_layer = None
                     for layer in self.model.layers:
                         if layer.name.startswith("population__cell_"):
                             spots_pop_layer = layer
                             break
                     
-                    if spots_pop_layer and hasattr(cells_pop_block, layer_name) and hasattr(spots_pop_layer, layer_name):
-                        val = getattr(cells_pop_block, layer_name)
-                        # If it's a variable, get value
+                    attr_name = f"var_{layer_name}"
+                    if spots_pop_layer and hasattr(cells_pop_block, attr_name) and hasattr(spots_pop_layer, attr_name):
+                        val = getattr(cells_pop_block, attr_name)
                         if hasattr(val, "numpy"):
                             val = val.numpy()
                         
-                        # Set in SPOTS layer (it might be a constant or variable)
-                        # Since we can't easily set_weights on individual attributes if they are not tracked as weights,
-                        # we check if they are in trainable_weights
-                        target_attr = getattr(spots_pop_layer, layer_name)
+                        target_attr = getattr(spots_pop_layer, attr_name)
                         if hasattr(target_attr, "assign"):
                             target_attr.assign(val)
                         else:
-                            setattr(spots_pop_layer, layer_name, tf.constant(val))
+                            # If it's a constant, we might need to recreate it
+                            setattr(spots_pop_layer, attr_name, tf.constant(val))
                         
-                        print(f"[INFO] Transferred {layer_name} from CELLS population_block to SPOTS {spots_pop_layer.name}")
+                        print(f"[INFO] Transferred {layer_name} from CELLS to SPOTS")
 
                 # Optionally freeze
                 if freeze_transferred:
