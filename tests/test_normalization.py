@@ -9,6 +9,7 @@ from pyparaglide.data.normalization import (
     Normalization,
     apply_normalization,
     compute_normalization_coeffs,
+    wind_uv_to_direction_bins,
 )
 
 
@@ -87,3 +88,145 @@ class TestNormalization:
         np.testing.assert_array_equal(loaded.other_std, norm.other_std)
         np.testing.assert_array_equal(loaded.humidity_mean, norm.humidity_mean)
         np.testing.assert_array_equal(loaded.humidity_std, norm.humidity_std)
+
+
+class TestWindDirectionEncoding:
+    """Test wind direction encoding functions."""
+
+    def test_wind_uv_to_direction_bins_east(self):
+        """Test East wind (u>0, v=0) maps to bin 4 (per original formula)."""
+        # East wind: u=10, v=0
+        uv = np.array([[10.0, 0.0]], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Magnitude should be in bin 4 (East per original formula)
+        assert result.shape == (1, 8)
+        np.testing.assert_array_almost_equal(result[0, 4], 10.0)  # magnitude in bin 4
+        result[0, 4] = 0
+        np.testing.assert_array_almost_equal(result[0], np.zeros(8))  # other bins zero
+
+    def test_wind_uv_to_direction_bins_north(self):
+        """Test North wind (u=0, v>0) maps to bin 6 (per original formula)."""
+        # North wind: u=0, v=10
+        uv = np.array([[0.0, 10.0]], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Magnitude should be in bin 6 (North per original formula)
+        np.testing.assert_array_almost_equal(result[0, 6], 10.0)
+        result[0, 6] = 0
+        np.testing.assert_array_almost_equal(result[0], np.zeros(8))
+
+    def test_wind_uv_to_direction_bins_west(self):
+        """Test West wind (u<0, v=0) maps to bin 0 (per original formula)."""
+        # West wind: u=-10, v=0
+        uv = np.array([[-10.0, 0.0]], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Magnitude should be in bin 0 (West per original formula)
+        np.testing.assert_array_almost_equal(result[0, 0], 10.0)
+        result[0, 0] = 0
+        np.testing.assert_array_almost_equal(result[0], np.zeros(8))
+
+    def test_wind_uv_to_direction_bins_south(self):
+        """Test South wind (u=0, v<0) maps to bin 2 (per original formula)."""
+        # South wind: u=0, v=-10
+        uv = np.array([[0.0, -10.0]], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Magnitude should be in bin 2 (South per original formula)
+        np.testing.assert_array_almost_equal(result[0, 2], 10.0)
+        result[0, 2] = 0
+        np.testing.assert_array_almost_equal(result[0], np.zeros(8))
+
+    def test_wind_uv_to_direction_bins_diagonal(self):
+        """Test diagonal wind directions."""
+        # Northeast wind: u=10, v=10
+        uv = np.array([[10.0, 10.0]], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Should map to bin 5 (Northeast per original formula)
+        magnitude = 10.0 * np.sqrt(2)
+        assert result[0, 5] > magnitude * 0.9  # Allow small rounding error
+        assert result[0, 5] < magnitude * 1.1
+        np.testing.assert_array_almost_equal(np.sum(result), magnitude, decimal=2)
+
+    def test_wind_uv_to_direction_bins_multiple_samples(self):
+        """Test multiple wind vectors at once."""
+        uv = np.array([
+            [10.0, 0.0],   # East -> bin 4
+            [0.0, 10.0],   # North -> bin 6
+            [-10.0, 0.0],  # West -> bin 0
+        ], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        assert result.shape == (3, 8)
+        np.testing.assert_array_almost_equal(result[0, 4], 10.0)  # East
+        np.testing.assert_array_almost_equal(result[1, 6], 10.0)  # North
+        np.testing.assert_array_almost_equal(result[2, 0], 10.0)  # West
+
+    def test_wind_uv_to_direction_bins_zero_wind(self):
+        """Test zero wind (calm)."""
+        uv = np.array([[0.0, 0.0]], dtype=np.float32)
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # All bins should be zero
+        np.testing.assert_array_almost_equal(result[0], np.zeros(8))
+
+    def test_convert_wind_matrix(self):
+        """Test the full convert_wind_matrix function from dataset.py."""
+        from pyparaglide.data.dataset import convert_wind_matrix
+
+        # Create wind matrix with all 5 altitudes
+        # Format: U0, V0, U1, V1, U2, V2, U3, V3, U4, V4
+        wind_matrix = np.array([
+            [10.0, 0.0, 0.0, 10.0, -5.0, 0.0, 5.0, 5.0, 0.0, -10.0],  # 5 altitudes
+            [-5.0, 0.0, 5.0, 5.0, 10.0, 0.0, 0.0, -10.0, 0.0, 10.0],
+        ], dtype=np.float32)
+
+        result = convert_wind_matrix(wind_matrix, wind_dim=8)
+
+        # Shape should be (2 samples, 5 altitudes * 8 bins) = (2, 40)
+        assert result.shape == (2, 40)
+
+        # Check first sample, first altitude (East wind -> bin 4)
+        np.testing.assert_array_almost_equal(result[0, 4], 10.0)
+        np.testing.assert_array_almost_equal(result[0, :4], 0.0)
+        np.testing.assert_array_almost_equal(result[0, 5:8], 0.0)
+
+        # Check first sample, second altitude (North wind -> bin 6)
+        np.testing.assert_array_almost_equal(result[0, 8 + 6], 10.0)
+
+    def test_wind_encoding_not_all_in_bin_0(self):
+        """
+        Regression test: ensure different wind directions map to different bins.
+
+        This test prevents the bug where all wind magnitudes were placed in bin 0,
+        losing all direction information.
+        """
+        # Create wind vectors in different directions
+        uv = np.array([
+            [10.0, 0.0],   # East
+            [0.0, 10.0],   # North
+            [-10.0, 0.0],  # West
+            [0.0, -10.0],  # South
+            [7.0, 7.0],    # Northeast
+        ], dtype=np.float32)
+
+        result = wind_uv_to_direction_bins(uv, n_bins=8)
+
+        # Find which bin has the magnitude for each sample
+        active_bins = [np.argmax(result[i]) for i in range(len(uv))]
+
+        # All active bins should be different (direction information preserved)
+        assert len(set(active_bins)) == len(active_bins), \
+            f"Wind directions not uniquely encoded! Active bins: {active_bins}"
+
+        # Specifically, bin 0 should NOT be active for all (the bug we're preventing)
+        assert active_bins.count(0) <= 1, \
+            f"All wind vectors in bin 0! Direction info lost. Active bins: {active_bins}"
+
+        # Each sample should have magnitude in exactly one bin
+        for i in range(len(uv)):
+            non_zero_bins = np.sum(result[i] > 0)
+            assert non_zero_bins == 1, \
+                f"Sample {i} has magnitude in {non_zero_bins} bins, expected 1"

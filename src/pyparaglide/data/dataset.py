@@ -353,27 +353,31 @@ def convert_wind_matrix(wind_matrix: np.ndarray, wind_dim: int) -> np.ndarray:
     """
     Convert wind matrix to wind direction encoding.
 
+    Matches the original implementation in neural_network/inc/utils.py:75-79.
+
+    Input format: (nb_samples, 2*nb_altitudes) with U,V,U,V,... for each altitude
+    Output format: (nb_samples, nb_altitudes*wind_dim) with direction bins
+
     Args:
-        wind_matrix: Raw wind data (nb_days*nb_cells, nb_params)
+        wind_matrix: Raw wind data with U,V components for each altitude
         wind_dim: Number of wind direction bins (typically 8)
 
     Returns:
-        Encoded wind matrix with direction bins
+        Encoded wind matrix where magnitude is placed in the correct direction bin
     """
-    # This is a simplified version - the original has more complex wind direction encoding
-    # For now, just return the raw data reshaped appropriately
+    from pyparaglide.data.normalization import wind_uv_to_direction_bins
+
     nb_samples = wind_matrix.shape[0]
-    nb_altitudes = 5
+    nb_altitudes = 5  # Fixed: 600,700,800,900,1000 hPa
 
-    # Reshape to (nb_samples, nb_altitudes, wind_dim)
-    # This assumes the input has U and V components for each altitude
-    result = np.zeros((nb_samples, nb_altitudes, wind_dim), dtype=np.float32)
+    result = np.zeros((nb_samples, nb_altitudes * wind_dim), dtype=np.float32)
 
-    # Simple encoding: just copy values (proper wind direction encoding to be implemented)
-    for i in range(nb_samples):
-        for alt in range(nb_altitudes):
-            for d in range(wind_dim):
-                if alt * 2 + d < wind_matrix.shape[1]:
-                    result[i, alt, d] = wind_matrix[i, alt * 2 + d]
+    for alt in range(nb_altitudes):
+        # Extract U,V for this altitude (columns alt*2, alt*2+1)
+        uv = wind_matrix[:, alt * 2 : alt * 2 + 2]
+        # Convert to direction bins
+        encoded = wind_uv_to_direction_bins(uv, wind_dim)
+        # Place in result at the correct position
+        result[:, alt * wind_dim : (alt + 1) * wind_dim] = encoded
 
     return result
