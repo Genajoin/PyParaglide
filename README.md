@@ -113,7 +113,7 @@ pyparaglide build-dataset --dates 2024-06-01:2024-08-31
 ### 4. Train Model
 
 ```bash
-pyparaglide train --cells 10 --epochs 55
+pyparaglide train --cell 10 --epochs 55
 ```
 
 ### 5. Generate Forecast
@@ -160,13 +160,13 @@ pyparaglide download --dates 2024-06-01:2024-08-31 --workers 4 --filter
 
 ```bash
 # Train with 10 cells for 55 epochs
-pyparaglide train --cells 10 --epochs 55 --batch-size 32
+pyparaglide train --cell 10 --epochs 55 --batch-size 32
 
 # Train with specific learning rate
-pyparaglide train --cells 5 --lr-init 0.01 --lr-end 0.001
+pyparaglide train --cell 5 --lr-init 0.01 --lr-end 0.001
 
 # Train without validation
-pyparaglide train --cells 10 --no-validation
+pyparaglide train --cell 10 --no-validation
 ```
 
 ### Example: Forecast

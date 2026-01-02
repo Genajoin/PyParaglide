@@ -52,14 +52,14 @@ This creates PKL files in `data/pkl/`:
 
 ```bash
 # Full training (recommended)
-pyparaglide train --cells 10 --epochs 55 --batch-size 32
+pyparaglide train --cell 10 --epochs 55 --batch-size 32
 
 # Quick test (1 cell, 2 epochs)
-pyparaglide train --cells 1 --epochs 2 --batch-size 8
+pyparaglide train --cell 1 --epochs 2 --batch-size 8
 ```
 
 **Parameters:**
-- `--cells` — Number of grid cells to train (use `10` for full Alps, `1` for testing)
+- `--cell` — Cell index to train (e.g., `10` for full Alps, `1` for testing)
 - `--epochs` — Number of training epochs (`55` is optimal)
 - `--batch-size` — Batch size (`32` is default)
 - `--lr-init` — Initial learning rate (default: `0.008`)
@@ -80,7 +80,7 @@ To `data/models/` by default (configurable via `PYPARAGLIDE_MODELS_DIR`).
 
 ```bash
 # Full Alps training (55 epochs)
-pyparaglide train --cells 10 --epochs 55 --batch-size 32
+pyparaglide train --cell 10 --epochs 55 --batch-size 32
 ```
 
 ### Learning Rate Schedule
@@ -89,8 +89,8 @@ The model uses exponential decay from `0.008` to `0.0007` over 55 epochs. This s
 
 ### Number of Cells
 
-- **Testing**: Use `--cells 1` for quick experiments
-- **Production**: Use `--cells 10` (or more) for full coverage
+- **Testing**: Use `--cell 1` for quick experiments
+- **Production**: Use `--cell 10` (or more) for full coverage
 - The Alps region is divided into ~10 cells at 1°×1° resolution
 
 ### Monitoring Training
@@ -106,7 +106,7 @@ Watch for these indicators:
 
 Reduce batch size:
 ```bash
-pyparaglide train --cells 10 --epochs 55 --batch-size 16
+pyparaglide train --cell 10 --epochs 55 --batch-size 16
 ```
 
 ### Poor Convergence
@@ -133,20 +133,20 @@ pyparaglide train --models-dir /path/to/models
 ### Custom Learning Rates
 
 ```bash
-pyparaglide train --cells 10 --lr-init 0.01 --lr-end 0.001 --epochs 55
+pyparaglide train --cell 10 --lr-init 0.01 --lr-end 0.001 --epochs 55
 ```
 
 ### Resume Training
 
 ```bash
-pyparaglide train --cells 10 --load-weights --epochs 55
+pyparaglide train --cell 10 --load-weights --epochs 55
 ```
 
 ### Super-Resolution
 
 For higher spatial resolution (experimental):
 ```bash
-pyparaglide train --cells 10 --super-res 2 --epochs 55
+pyparaglide train --cell 10 --super-res 2 --epochs 55
 ```
 
 ## See Also

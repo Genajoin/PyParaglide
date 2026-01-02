@@ -49,6 +49,8 @@ def parse_date_ranges(
         try:
             start = dt.datetime.strptime(dates[0].strip(), "%Y-%m-%d").date()
             end = dt.datetime.strptime(dates[1].strip(), "%Y-%m-%d").date()
+            if start > end:
+                raise ValueError(f"Start date ({start}) must be before or equal to end date ({end})")
             ranges.append((start, end))
         except ValueError as e:
             raise ValueError(f"Invalid date format in range: {part} ({e})")

@@ -7,7 +7,7 @@ by detecting clusters of flights in 1°×1° cells.
 
 import json
 import re
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import datetime, date
 from pathlib import Path
@@ -152,9 +152,9 @@ class FlightAnalyzer:
             assigned.add(cell_key)
 
             # Find nearby cells (BFS)
-            queue = [(lat, lon)]
+            queue = deque([(lat, lon)])
             while queue:
-                curr_lat, curr_lon = queue.pop(0)
+                curr_lat, curr_lon = queue.popleft()
 
                 # Check neighbors (within max_distance_degrees)
                 for other_lat, other_lon, other_count in cell_list:

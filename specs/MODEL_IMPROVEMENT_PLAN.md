@@ -60,7 +60,7 @@ We aim to extract and utilize the following parameters from GFS datasets. These 
 ## 3. Verification Plan
 1.  **Unit Test Data Extraction:** Run `check_grib.py` (or create a script) to verify PBLH/CAPE values are not all zeros or NaNs for a sample GFS file.
 2.  **Shape Check:** Verify the `.pkl` files have increased size/dimensions.
-3.  **Training Dry Run:** Run `pyparaglide train --cells 1 --epochs 1` to ensure no shape mismatch errors in TensorFlow.
+3.  **Training Dry Run:** Run `pyparaglide train --cell 1 --epochs 1` to ensure no shape mismatch errors in TensorFlow.
 4.  **Correlation Check:** (Optional) Before training, plot PBLH vs. Number of Flights to confirm the physical correlation exists in the dataset.
 
 ## 4. Migration Notes

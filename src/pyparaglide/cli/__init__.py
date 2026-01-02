@@ -402,7 +402,7 @@ Missing days: {len(result.missing_days)}"""
         for start, end in ranges:
             range_strs.append(f"{start.isoformat()}:{end.isoformat()}")
 
-        console.print(f"  [cyan]pyparaglide download --dates \"{' ,'.join(range_strs)}\"[/cyan]")
+        console.print(f"  [cyan]pyparaglide download --dates \"{','.join(range_strs)}\"[/cyan]")
     else:
         console.print(f"[green]All expected days are available![/green]")
 
@@ -412,7 +412,7 @@ def train(
     model_type: str = typer.Option("spots", "--model", "-m", help="Model type: 'cells' or 'spots' (default: spots)"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
     models_dir: str = typer.Option(None, "--models-dir", "-o", help="Directory to save model weights"),
-    cells: str = typer.Option(None, "--cells", "-c", help="Number of cells or comma-separated list (default: all)"),
+    cells: str = typer.Option(None, "--cell", "-c", help="Cell index (e.g., 3) or comma-separated list (e.g., 0,1,2) (default: all)"),
     lr_init: float = typer.Option(0.008, "--lr-init", help="Initial learning rate"),
     lr_end: float = typer.Option(7e-4, "--lr-end", help="Final learning rate"),
     epochs: int = typer.Option(55, "--epochs", "-e", help="Number of training epochs"),
@@ -430,7 +430,7 @@ def train(
     SPOTS training requires CELLS weights - will auto-train if missing.
 
     Example:
-        pyparaglide train --cells 10 --epochs 55
+        pyparaglide train --cell 10 --epochs 55
     """
     from pyparaglide.preprocessing.dataset_utils import ensure_dataset_exists
     from pyparaglide.training.weight_utils import cells_weights_exist, train_cells_prerequisite
@@ -453,7 +453,7 @@ def train(
 
     # Parse cells
     if cells:
-        # Support: "--cells 3" (cell index 3) and "--cells 0,1,2" (specific indices)
+        # Support: "--cell 3" (cell index 3) and "--cell 0,1,2" (specific indices)
         cells_list = [int(c.strip()) for c in cells.split(",")]
     else:
         cells_list = None  # Will use all cells
@@ -478,7 +478,7 @@ def train(
             console.print("  2. [cyan]Or use the original build script:[/cyan]")
             console.print("     python scripts/build_dataset.py --dates 2024-06-01:2024-08-31")
             console.print("  3. [cyan]Or train CELLS model instead:[/cyan]")
-            console.print("     pyparaglide train --model cells --cells 10 --epochs 55")
+            console.print("     pyparaglide train --model cells --cell 10 --epochs 55")
         else:
             console.print("[red]Dataset validation failed. Please run:[/red]")
             console.print("  [cyan]pyparaglide build-dataset --dates 2024-06-01:2024-08-31[/cyan]")
