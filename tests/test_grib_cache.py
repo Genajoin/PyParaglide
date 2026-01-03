@@ -136,19 +136,6 @@ class TestGribCache:
         # Verify it's valid
         assert cache.is_valid(sample_grib_file, sample_config)
 
-    def test_is_valid_invalidate_on_md5_mismatch(self, temp_cache_dir, sample_grib_file, sample_values, sample_config, sample_params):
-        """Test that is_valid returns False when GRIB file MD5 changes."""
-        cache = GribCache(temp_cache_dir)
-
-        # Save cache
-        cache.save(sample_grib_file, sample_values, sample_config)
-
-        # Modify GRIB file (change MD5)
-        sample_grib_file.write_bytes(b"modified content")
-
-        # Verify cache is invalid
-        assert not cache.is_valid(sample_grib_file, sample_config)
-
     def test_is_valid_invalidate_on_nb_cells_mismatch(self, temp_cache_dir, sample_grib_file, sample_values, sample_config, sample_params):
         """Test that is_valid returns False when nb_cells changes."""
         cache = GribCache(temp_cache_dir)

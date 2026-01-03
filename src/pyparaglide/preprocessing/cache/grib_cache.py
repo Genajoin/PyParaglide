@@ -87,9 +87,12 @@ class GribCache:
 
         Validates:
         1. Cache file exists
-        2. GRIB file MD5 matches (detects file changes)
+        2. GRIB file exists
         3. bbox matches (detects cell grid changes)
         4. nb_cells matches (detects grid size changes)
+
+        Note: MD5 validation removed to avoid reading 500MB GRIB files.
+        NOAA GRIB files don't change after download.
 
         Args:
             grib_path: Path to source GRIB file (can be str or Path)
@@ -111,18 +114,15 @@ class GribCache:
         try:
             cache_data = np.load(cache_path, allow_pickle=True)
 
-            # Check GRIB MD5
-            current_md5 = self._compute_md5(grib_path)
-            cached_md5 = str(cache_data['grib_md5'])
-            if current_md5 != cached_md5:
-                return False
-
             # Check bbox - handle None case
             cached_bbox = cache_data['bbox']
             current_bbox = config.get('bbox')
+            # Handle numpy.array(None) case - convert to None
+            if hasattr(cached_bbox, 'dtype') and cached_bbox.dtype == object and cached_bbox.size == 1:
+                cached_bbox = cached_bbox.item()  # Extract scalar from array
             # Convert both to tuple for comparison (cached might be numpy array)
-            if cached_bbox is not None:
-                cached_bbox = tuple(cached_bbox) if hasattr(cached_bbox, '__iter__') else cached_bbox
+            if cached_bbox is not None and hasattr(cached_bbox, '__iter__') and not isinstance(cached_bbox, str):
+                cached_bbox = tuple(cached_bbox)
             if current_bbox is not None:
                 current_bbox = tuple(current_bbox)
             if cached_bbox != current_bbox:
@@ -189,9 +189,6 @@ class GribCache:
         cache_path = self._get_full_cache_path(grib_path)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Compute MD5 of source GRIB
-        grib_md5 = self._compute_md5(grib_path)
-
         # Prepare metadata - only numpy-serializable values
         bbox_val = config.get('bbox')
         # Convert bbox to tuple for storage, or None if not provided
@@ -203,7 +200,6 @@ class GribCache:
             'cells_latlon': np.array(config.get('cells_latlon', []), dtype=np.float32),
             'bbox': bbox_val,
             'nb_cells': config.get('nb_cells', 0),
-            'grib_md5': grib_md5,
             'extraction_time': datetime.utcnow().isoformat() + 'Z',
         }
 
