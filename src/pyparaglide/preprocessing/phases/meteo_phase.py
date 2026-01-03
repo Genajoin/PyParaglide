@@ -34,7 +34,9 @@ class BuildMeteoPhase:
                  date_ranges: Optional[List[Tuple[date, date]]] = None,
                  num_workers: int = 4,
                  force: bool = False,
-                 queue_size: int = 3):
+                 queue_size: int = 3,
+                 use_cache: bool = True,
+                 rebuild_cache: bool = False):
         """
         Args:
             bbox: Bounding box
@@ -45,6 +47,8 @@ class BuildMeteoPhase:
             num_workers: Number of worker processes
             force: Force rebuild even if PKL files exist
             queue_size: Size of GRIB job queue
+            use_cache: Enable GRIB file caching (default: True)
+            rebuild_cache: Force rebuild of GRIB cache
         """
         self.bbox = bbox
         self.gfs_dir = gfs_dir
@@ -54,6 +58,8 @@ class BuildMeteoPhase:
         self.num_workers = num_workers
         self.force = force
         self.queue_size = queue_size
+        self.use_cache = use_cache
+        self.rebuild_cache = rebuild_cache
 
         self.meteo_days = []
 
@@ -235,6 +241,43 @@ class BuildMeteoPhase:
             self._save_pkl("meteo_content_by_cell_day", matrix)
             return
 
+        # Setup cache
+        cache_dir = None
+        cache = None
+        if self.use_cache:
+            cache_dir = self.out_dir / "cache" / "grib"
+            if self.rebuild_cache:
+                from pyparaglide.preprocessing.cache import GribCache
+                print(f"  Clearing GRIB cache at {cache_dir}")
+                cache = GribCache(cache_dir)
+                count = cache.clear_all()
+                print(f"  Removed {count} cached files")
+            else:
+                from pyparaglide.preprocessing.cache import GribCache
+                cache = GribCache(cache_dir)
+                print(f"  Using GRIB cache at {cache_dir}")
+
+                # Fast path: check if ALL files are cached
+                all_cached = True
+                missing_files = []
+                config = {'bbox': None, 'nb_cells': len(self.cells_latlon)}
+
+                for day_date in self.meteo_days:
+                    for hour in [6, 12, 18]:
+                        grb_path = self.gfs_dir / day_date.strftime('%Y-%m') / f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
+                        if not cache.is_valid(grb_path, config):
+                            all_cached = False
+                            missing_files.append(f"{day_date} {hour}:00")
+                            break
+                    if not all_cached:
+                        break
+
+                if all_cached:
+                    # Load all from cache - FAST PATH!
+                    print(f"  Loading {len(self.meteo_days)} days from GRIB cache...")
+                    self._load_from_cache(cache)
+                    return
+
         # Build GRIB params (65 without hour dimension)
         grib_params = []
         for param in ['Precipitable water', 'Cloud water']:
@@ -274,7 +317,7 @@ class BuildMeteoPhase:
         # Start reader thread
         reader = threading.Thread(
             target=file_reader,
-            args=(file_queue, job_queue, str(self.gfs_dir), stop_event),
+            args=(file_queue, job_queue, str(self.gfs_dir), stop_event, self.use_cache),
             daemon=True
         )
         reader.start()
@@ -284,7 +327,7 @@ class BuildMeteoPhase:
         for i in range(self.num_workers):
             p = multiprocessing.Process(
                 target=file_processor,
-                args=(job_queue, hourly_queue, grib_params, self.cells_latlon),
+                args=(job_queue, hourly_queue, grib_params, self.cells_latlon, cache_dir),
                 daemon=True
             )
             p.start()
@@ -372,6 +415,36 @@ class BuildMeteoPhase:
         meteo_content = np.array(all_data, dtype=np.float32)
         print(f"  Matrix shape: {meteo_content.shape}")
 
+        self._save_pkl("meteo_content_by_cell_day", meteo_content)
+
+    def _load_from_cache(self, cache) -> None:
+        """
+        Load all meteo data from cache (fast path).
+
+        Produces matrix of shape (nb_days * nb_cells, 195) where each row is
+        [hour6_params(65), hour12_params(65), hour18_params(65)] for a single day-cell.
+
+        Args:
+            cache: GribCache instance
+        """
+        import numpy as np
+
+        nb_cells = len(self.cells_latlon)
+        all_data = []
+
+        for day_date in self.meteo_days:
+            for cell_idx in range(nb_cells):
+                row_data = []
+                for hour in [6, 12, 18]:
+                    grb_path = self.gfs_dir / day_date.strftime('%Y-%m') / f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
+                    # Load from cache (already validated) - returns (nb_cells, 65)
+                    values = cache.load(grb_path, flatten=False)
+                    row_data.extend(values[cell_idx])  # Add this cell's 65 params for this hour
+                all_data.append(row_data)  # Append complete row of 195 values
+
+        # Convert to array and save - shape should be (nb_days * nb_cells, 195)
+        meteo_content = np.array(all_data, dtype=np.float32)
+        print(f"  Loaded from cache: matrix shape {meteo_content.shape}")
         self._save_pkl("meteo_content_by_cell_day", meteo_content)
 
     def _suggest_download(self) -> None:

@@ -1123,6 +1123,8 @@ def build_dataset(
     no_flights: bool = typer.Option(False, "--no-flights", help="Skip flight data processing"),
     force: bool = typer.Option(False, "--force", help="Force rebuild even if PKL files exist"),
     analyze: bool = typer.Option(False, "--analyze", "-a", help="Run analysis and show recommendations after build"),
+    rebuild_cache: bool = typer.Option(False, "--rebuild-cache", help="Force rebuild of GRIB cache (re-extract all files)"),
+    skip_cache: bool = typer.Option(False, "--skip-cache", help="Disable GRIB caching (always re-extract)"),
 ) -> None:
     """
     Build PKL dataset from GFS GRIB files and flight data.
@@ -1216,6 +1218,8 @@ def build_dataset(
         cluster_distance_km=settings.spot_cluster_distance_km,
         num_workers=settings.workers,
         force=force,
+        use_cache=not skip_cache,
+        rebuild_cache=rebuild_cache,
     )
 
     console.print(f"\n[bold]Summary:[/bold]")

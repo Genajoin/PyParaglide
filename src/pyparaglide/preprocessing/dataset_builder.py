@@ -100,6 +100,8 @@ class DatasetBuilder:
         cluster_distance_km: Optional[float] = None,
         num_workers: int = 4,
         force: bool = False,
+        use_cache: bool = True,
+        rebuild_cache: bool = False,
     ) -> dict[str, Any]:
         """
         Build PKL dataset for multiple date ranges.
@@ -114,6 +116,8 @@ class DatasetBuilder:
             cluster_distance_km: Spot clustering radius in km
             num_workers: Number of multiprocessing workers for GRIB processing
             force: Force rebuild even if PKL files exist
+            use_cache: Enable GRIB file caching (default: True)
+            rebuild_cache: Force rebuild of GRIB cache
 
         Returns:
             Dictionary with build statistics
@@ -125,6 +129,10 @@ class DatasetBuilder:
         print(f"  Bbox: {self.bbox}")
         print(f"  Output: {self.output_dir}")
         print(f"  Workers: {num_workers}")
+        if use_cache:
+            print(f"  GRIB cache: enabled")
+        else:
+            print(f"  GRIB cache: disabled")
         print()
 
         # Phase 1: Build cells
@@ -145,6 +153,8 @@ class DatasetBuilder:
             date_ranges=date_ranges,  # ALL ranges, accumulated
             num_workers=num_workers,
             force=force,
+            use_cache=use_cache,
+            rebuild_cache=rebuild_cache,
         )
         meteo_days = phase2.execute()
 
