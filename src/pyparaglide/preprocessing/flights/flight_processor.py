@@ -621,13 +621,9 @@ def create_spots_pkls(flights: List[Dict],
                 record = (
                     f['datetime'],
                     (
-                        float(f.get('score', 0.0) or 0.0),
-                        float(f.get('alt', 0.0) or 0.0),
-                        float(f.get('plaf', 0.0) or 0.0),
-                        float(f['lat']),
-                        float(f['lon']),
-                        float(f.get('takeoff_alt', 0.0) or 0.0),
-                        float(f.get('mountainess', 0.5) or 0.5)
+                        float(f.get('score', 0.0) or 0.0),  # [1][0] - score for crossability
+                        float(f['lat']),                    # [1][1] - latitude
+                        float(f['lon']),                    # [1][2] - longitude
                     )
                 )
 

@@ -47,7 +47,7 @@ class Trainer:
 
         # Model parameters
         self.wind_dim = 8
-        self.nb_altitudes = 5
+        self.nb_altitudes = 1  # Changed from 5 - altitude binning removed
 
         # Load dataset
         self.dataset = Dataset(data_dir)
@@ -136,10 +136,10 @@ class Trainer:
         # Day of week (nb_days, 7)
         X_dow = self.dataset.get_dow()
 
-        # Mountainess (nb_days, nb_cells, nb_altitudes) - only used for CELLS
+        # Mountainess (nb_days, nb_cells, 1) - only used for CELLS (averaged over altitudes)
         if self.model_type == ModelType.CELLS:
-            mountainess = self.dataset.get_mountainess(cells, self.nb_altitudes)
-            X_mountainess = np.repeat(mountainess[np.newaxis, :, :], self.nb_days, axis=0)
+            mountainess = self.dataset.get_mountainess(cells, self.nb_altitudes)  # Shape: (nb_cells, 1)
+            X_mountainess = np.repeat(mountainess[np.newaxis, :, :], self.nb_days, axis=0)  # (nb_days, nb_cells, 1)
 
         # Initialize stacked arrays
         dim_other = X_other[0].shape[1]
@@ -148,7 +148,7 @@ class Trainer:
         dim_humidity = X_humidity[0].shape[1]
         X_humidity_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_humidity), dtype=np.float32)
         
-        X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, self.nb_altitudes, 3, self.wind_dim), dtype=np.float32)
+        X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, 1, 3, self.wind_dim), dtype=np.float32)
 
         for h in range(3):
             for i, cell in enumerate(cells):
@@ -173,19 +173,19 @@ class Trainer:
                 X_humidity_stacked[:, i, h, :] = X_humidity[h][start_idx : end_idx, :]
 
                 # Wind
-                # Extract wind for this cell (nb_days, alt*dim)
+                # Extract wind for this cell (nb_days, alt*dim) - average over altitudes
                 wind_cell = X_wind[h][start_idx : end_idx, :]
-                # Reshape to (nb_days, alt, dim)
-                wind_reshaped = wind_cell.reshape(self.nb_days, self.nb_altitudes, self.wind_dim)
+                # Reshape to (nb_days, 1, dim) - average over 5 altitudes to single value
+                wind_reshaped = wind_cell.reshape(self.nb_days, 5, self.wind_dim).mean(axis=1, keepdims=True)
                 # Assign to stacked array
-                X_wind_stacked[:, i, :, h, :] = wind_reshaped
+                X_wind_stacked[:, i, 0, h, :] = wind_reshaped[:, 0, :]
 
         # For SPOTS single-cell training: squeeze cell dimension to match model input shapes
         if self.model_type == ModelType.SPOTS:
             if nb_cells_model == 1:
                 X_other_stacked = X_other_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
                 X_humidity_stacked = X_humidity_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
-                X_wind_stacked = X_wind_stacked[:, 0, :, :, :]  # (nb_days, 1, nb_altitudes, 3, wind_dim) -> (nb_days, nb_altitudes, 3, wind_dim)
+                X_wind_stacked = X_wind_stacked[:, 0, :, :, :]  # (nb_days, 1, 1, 3, wind_dim) -> (nb_days, 1, 3, wind_dim)
             # Note: SPOTS model doesn't use mountainess, so don't include it
             return [X_date, X_dow, X_other_stacked, X_humidity_stacked, X_wind_stacked]
 
@@ -194,14 +194,14 @@ class Trainer:
     def _prepare_outputs(self, cells: list[int], super_resolution: int) -> list:
         """Prepare output tensors for model."""
         if self.model_type == ModelType.CELLS:
-            # Get data with shape (len(cells) * super_resolution^2 * nb_days, nb_altitudes)
+            # Get data with shape (len(cells) * super_resolution^2 * nb_days, 1)
             outputs = self.dataset.get_flights_by_altitude(
                 cells, self.nb_altitudes, super_resolution, self.problem_formulation == ProblemFormulation.REGRESSION
             )
-            # Reshape each output to (nb_days, len(cells) * super_resolution^2, nb_altitudes)
+            # Reshape each output to (nb_days, len(cells) * super_resolution^2, 1)
             # Use F-order because output is organized as [cell0_day0, cell0_day1, ..., cell1_day0, ...]
             return [
-                out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, self.nb_altitudes), order='F')
+                out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, 1), order='F')
                 for out in outputs
             ]
         else:

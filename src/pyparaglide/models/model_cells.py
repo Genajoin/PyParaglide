@@ -28,37 +28,22 @@ class ModelCells:
     """
     Grid-based (CELLS) model for paragliding flyability prediction.
 
-    Output names (21 total - 5 altitudes × 4 predictions + 1):
-        - flown 1000/900/800/700/600: Overall flight probability
-        - flown fufu 1000/900/800/700/600: Cross-country potential
-        - flown of wind 1000/900/800/700/600: Wind-based flyability
-        - flown of rain 1000/900/800/700/600: Humidity/rain-based flyability
+    After altitude binning removal (2026-01-03):
+    Output names (4 total - aggregated over all altitudes):
+        - flown: Overall flight probability
+        - crossed: Cross-country potential
+        - wind_flown: Wind-based flyability
+        - humidity_flown: Humidity/rain-based flyability
     """
 
     @classmethod
     def output_names(cls) -> list[str]:
-        """Return the names of all model outputs."""
+        """Return the names of all model outputs (after altitude binning removal)."""
         return [
-            "flown 1000",
-            "flown  900",
-            "flown  800",
-            "flown  700",
-            "flown  600",
-            "flown  fufu 1000",
-            "flown  fufu  900",
-            "flown  fufu  800",
-            "flown  fufu  700",
-            "flown  fufu  600",
-            "flown of wind 1000",
-            "flown of wind  900",
-            "flown of wind  800",
-            "flown of wind  700",
-            "flown of wind  600",
-            "flown of rain 1000",
-            "flown of rain  900",
-            "flown of rain  800",
-            "flown of rain  700",
-            "flown of rain  600",
+            "flown",
+            "crossed",
+            "wind_flown",
+            "humidity_flown",
         ]
 
     @classmethod
@@ -116,12 +101,12 @@ class ModelCells:
         input_date = tf.keras.layers.Input(shape=(1,), name="in_date")
         input_dow = tf.keras.layers.Input(shape=(7,), name="in_dow")
         input_mountainess = tf.keras.layers.Input(
-            shape=(nb_cells, nb_altitudes), name="in_mountainess"
+            shape=(nb_cells, 1), name="in_mountainess"  # nb_altitudes removed
         )
         input_other = tf.keras.layers.Input(shape=(nb_cells, 3, other_dim), name="in_other")
         input_humidity = tf.keras.layers.Input(shape=(nb_cells, 3, humidity_dim), name="in_rain")
         input_wind = tf.keras.layers.Input(
-            shape=(nb_cells, nb_altitudes, 3, wind_dim), name="in_wind"
+            shape=(nb_cells, 1, 3, wind_dim), name="in_wind"  # nb_altitudes -> 1
         )
 
         all_inputs = [
@@ -202,47 +187,37 @@ class ModelCells:
         inputs: list[tf.Tensor],
     ) -> tf.Tensor:
         """
-        Encapsulate flyability prediction with proper input reshaping.
+        Encapsulate flyability prediction (simplified for nb_altitudes=1).
 
-        Extrudes other and rain data over all altitudes, then reshapes for the flyability model.
+        Reshapes inputs for the flyability model without altitude tiling.
 
         Args:
             flyability_model: The flyability block model
             nb_cells: Number of grid cells
-            nb_altitudes: Number of altitude levels
+            nb_altitudes: Always 1 (altitude binning removed)
             input_dim_other: Other weather data dimensions
             input_dim_rain: Rain/humidity data dimensions
             inputs: [wind, other, rain] tensors
 
         Returns:
-            Flyability prediction reshaped to (batch, nb_cells, nb_altitudes)
+            Flyability prediction reshaped to (batch, nb_cells, 1)
         """
         wind, other, rain = inputs
 
+        # Simplified reshaping for nb_altitudes=1 (no tiling needed)
+        # Reshape to (batch * nb_cells, feature_dim) for flyability block processing
         reshape_in = tf.keras.layers.Lambda(
             lambda x: [
-                # wind: (batch, nb_cells, nb_altitudes, 3) -> (batch, nb_cells*nb_altitudes, 3)
-                tf.reshape(x[0], (-1, 3 * 1)),
-                # other: tile over altitudes -> (batch, nb_cells*nb_altitudes, 3*input_dim_other)
-                tf.reshape(
-                    tf.tile(
-                        tf.reshape(x[1], (-1, nb_cells, 1, 3, input_dim_other)),
-                        (1, 1, nb_altitudes, 1, 1),
-                    ),
-                    (-1, 3 * input_dim_other),
-                ),
-                # rain: tile over altitudes -> (batch, nb_cells*nb_altitudes, 3*input_dim_rain)
-                tf.reshape(
-                    tf.tile(
-                        tf.reshape(x[2], (-1, nb_cells, 1, 3, input_dim_rain)),
-                        (1, 1, nb_altitudes, 1, 1),
-                    ),
-                    (-1, 3 * input_dim_rain),
-                ),
+                # wind: (batch, nb_cells, 1, 3) -> (batch * nb_cells, 3)
+                tf.reshape(x[0], (-1, 3)),
+                # other: (batch, nb_cells, 3, input_dim_other) -> (batch * nb_cells, 3*input_dim_other)
+                tf.reshape(x[1], (-1, 3 * input_dim_other)),
+                # rain: (batch, nb_cells, 3, input_dim_rain) -> (batch * nb_cells, 3*input_dim_rain)
+                tf.reshape(x[2], (-1, 3 * input_dim_rain)),
             ]
         )
 
-        reshape_out = tf.keras.layers.Lambda(lambda x: tf.reshape(x, (-1, nb_cells, nb_altitudes)))
+        reshape_out = tf.keras.layers.Lambda(lambda x: tf.reshape(x, (-1, nb_cells, 1)))
 
         pre = reshape_in([wind, other, rain])
         flyability_prediction = flyability_model(pre)

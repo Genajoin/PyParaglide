@@ -45,7 +45,7 @@ class Forecaster:
 
         # Model parameters
         self.wind_dim = 8
-        self.nb_altitudes = 5
+        self.nb_altitudes = 1  # Changed from 5 - altitude binning removed
         self.nb_cells = 97  # Alps region default
 
         # Model and normalization (loaded later)
@@ -150,7 +150,7 @@ class Forecaster:
 
         # Mountainess (simplified - use elevation data if available)
         nb_cells = self.nb_cells
-        X_mountainess = np.zeros((1, nb_cells, self.nb_altitudes), dtype=np.float32)
+        X_mountainess = np.zeros((1, nb_cells, 1), dtype=np.float32)  # nb_altitudes=1
 
         # Combine all inputs
         return [X_date, X_dow, X_mountainess, X_other, X_humidity, X_wind]
@@ -170,7 +170,7 @@ class Forecaster:
         # Extract for each forecast hour
         X_other = np.zeros((1, nb_cells, nb_hours, 45), dtype=np.float32)  # 5 params × 9 levels
         X_humidity = np.zeros((1, nb_cells, nb_hours, 2), dtype=np.float32)  # PWAT, CWAT
-        X_wind = np.zeros((1, nb_cells, self.nb_altitudes, nb_hours, self.wind_dim), dtype=np.float32)
+        X_wind = np.zeros((1, nb_cells, 1, nb_hours, self.wind_dim), dtype=np.float32)  # nb_altitudes=1
 
         for h, reader in enumerate(readers):
             # This is simplified - proper implementation needs:
@@ -193,20 +193,21 @@ class Forecaster:
                     if data is not None:
                         X_humidity[0, cell_idx, h, param_idx] = np.mean(data)
 
-                # Extract wind and convert to direction bins
-                for alt_idx, level in enumerate([1000, 900, 800, 700, 600]):
+                # Extract wind and convert to direction bins (averaged over 5 altitudes)
+                wind_dirs_avg = np.zeros(self.wind_dim, dtype=np.float32)
+                for level in [1000, 900, 800, 700, 600]:
                     u = reader.get_bbox_data("u", bbox, level)
                     v = reader.get_bbox_data("v", bbox, level)
                     if u is not None and v is not None:
-                        # Get mean wind for this cell
                         u_mean = np.mean(u)
                         v_mean = np.mean(v)
-
-                        # Convert to direction bins
                         wind_dirs = GribReader.wind_to_directions(
                             np.array([[u_mean]]), np.array([[v_mean]]), self.wind_dim
                         )
-                        X_wind[0, cell_idx, alt_idx, h, :] = wind_dirs[0, 0, :]
+                        wind_dirs_avg += wind_dirs[0, 0, :]
+
+                # Average over 5 altitudes
+                X_wind[0, cell_idx, 0, h, :] = wind_dirs_avg / 5.0
 
         # Apply normalization (if loaded)
         if self.normalization is not None:
@@ -242,18 +243,14 @@ class Forecaster:
             flown, crossed, wind_flown, humidity_flown = predictions
 
             for cell_idx in range(self.nb_cells):
+                # Single aggregated prediction per cell (altitude binning removed)
                 cell_result = {
                     "cell_id": cell_idx,
-                    "altitudes": {},
+                    "flyability": float(flown[0, cell_idx, 0]),
+                    "crossability": float(crossed[0, cell_idx, 0]),
+                    "wind_flyability": float(wind_flown[0, cell_idx, 0]),
+                    "humidity_flyability": float(humidity_flown[0, cell_idx, 0]),
                 }
-
-                for alt_idx, alt_level in enumerate([1000, 900, 800, 700, 600]):
-                    cell_result["altitudes"][f"{alt_level}hPa"] = {
-                        "flyability": float(flown[0, cell_idx, alt_idx]),
-                        "crossability": float(crossed[0, cell_idx, alt_idx]),
-                        "wind_flyability": float(wind_flown[0, cell_idx, alt_idx]),
-                        "humidity_flyability": float(humidity_flown[0, cell_idx, alt_idx]),
-                    }
 
                 results["predictions"].append(cell_result)
 

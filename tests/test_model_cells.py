@@ -15,15 +15,15 @@ class TestModelCells:
     """Test ModelCells model creation and execution."""
 
     def test_output_names(self):
-        """Test output names list."""
+        """Test output names list (after altitude binning removal)."""
         names = ModelCells.output_names()
 
-        assert len(names) == 20
-        assert "flown 1000" in names
-        assert "flown  900" in names
-        assert "flown  fufu 1000" in names
-        assert "flown of wind 1000" in names
-        assert "flown of rain 1000" in names
+        # After altitude binning removal: 4 outputs instead of 20
+        assert len(names) == 4
+        assert "flown" in names
+        assert "crossed" in names
+        assert "wind_flown" in names
+        assert "humidity_flown" in names
 
     def test_create_model_classification(self):
         """Test creating CELLS model for CLASSIFICATION."""
@@ -33,7 +33,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -64,7 +64,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -80,7 +80,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -90,10 +90,10 @@ class TestModelCells:
         inputs = {
             "in_date": tf.constant(np.random.rand(batch_size, 1), dtype=tf.float32),
             "in_dow": tf.constant(np.random.rand(batch_size, 7), dtype=tf.float32),
-            "in_mountainess": tf.constant(np.random.randn(batch_size, 1, 5), dtype=tf.float32),
+            "in_mountainess": tf.constant(np.random.randn(batch_size, 1, 1), dtype=tf.float32),
             "in_other": tf.constant(np.random.randn(batch_size, 1, 3, 45), dtype=tf.float32),
             "in_rain": tf.constant(np.random.randn(batch_size, 1, 3, 2), dtype=tf.float32),
-            "in_wind": tf.constant(np.random.randn(batch_size, 1, 5, 3, 8), dtype=tf.float32),
+            "in_wind": tf.constant(np.random.randn(batch_size, 1, 1, 3, 8), dtype=tf.float32),
         }
 
         # Run forward pass
@@ -102,9 +102,9 @@ class TestModelCells:
         # Check outputs
         assert len(outputs) == 4
 
-        # Each output should have shape (batch, nb_cells, nb_altitudes)
+        # Each output should have shape (batch, nb_cells, 1) after altitude binning removal
         for output in outputs:
-            assert output.shape == (batch_size, 1, 5)
+            assert output.shape == (batch_size, 1, 1)
 
     def test_output_range(self):
         """Test that all outputs are in [0, 1] range (sigmoid activation)."""
@@ -114,7 +114,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -123,10 +123,10 @@ class TestModelCells:
         inputs = {
             "in_date": tf.constant(np.random.rand(batch_size, 1), dtype=tf.float32),
             "in_dow": tf.constant(np.random.rand(batch_size, 7), dtype=tf.float32),
-            "in_mountainess": tf.constant(np.random.randn(batch_size, 1, 5), dtype=tf.float32),
+            "in_mountainess": tf.constant(np.random.randn(batch_size, 1, 1), dtype=tf.float32),
             "in_other": tf.constant(np.random.randn(batch_size, 1, 3, 45), dtype=tf.float32),
             "in_rain": tf.constant(np.random.randn(batch_size, 1, 3, 2), dtype=tf.float32),
-            "in_wind": tf.constant(np.random.randn(batch_size, 1, 5, 3, 8), dtype=tf.float32),
+            "in_wind": tf.constant(np.random.randn(batch_size, 1, 1, 3, 8), dtype=tf.float32),
         }
 
         outputs = model(inputs)
@@ -146,7 +146,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=super_resolution,
         )
 
@@ -155,18 +155,18 @@ class TestModelCells:
         inputs = {
             "in_date": tf.constant(np.random.rand(batch_size, 1), dtype=tf.float32),
             "in_dow": tf.constant(np.random.rand(batch_size, 7), dtype=tf.float32),
-            "in_mountainess": tf.constant(np.random.randn(batch_size, 1, 5), dtype=tf.float32),
+            "in_mountainess": tf.constant(np.random.randn(batch_size, 1, 1), dtype=tf.float32),
             "in_other": tf.constant(np.random.randn(batch_size, 1, 3, 45), dtype=tf.float32),
             "in_rain": tf.constant(np.random.randn(batch_size, 1, 3, 2), dtype=tf.float32),
-            "in_wind": tf.constant(np.random.randn(batch_size, 1, 5, 3, 8), dtype=tf.float32),
+            "in_wind": tf.constant(np.random.randn(batch_size, 1, 1, 3, 8), dtype=tf.float32),
         }
 
         outputs = model(inputs)
 
-        # Output should have shape (batch, nb_cells * super_resolution^2, nb_altitudes)
+        # Output should have shape (batch, nb_cells * super_resolution^2, 1) after altitude binning removal
         expected_cells = 1 * super_resolution * super_resolution
         for output in outputs:
-            assert output.shape == (batch_size, expected_cells, 5)
+            assert output.shape == (batch_size, expected_cells, 1)
 
     def test_trainable_variables(self):
         """Test that model has trainable variables."""
@@ -176,7 +176,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -198,7 +198,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -216,7 +216,7 @@ class TestModelCells:
             wind_dim=8,
             other_dim=45,
             humidity_dim=2,
-            nb_altitudes=5,
+            nb_altitudes=1,
             super_resolution=1,
         )
 
@@ -233,9 +233,9 @@ class TestModelCellsEncapsulateFlyability:
     """Test _encapsulate_flyability static method."""
 
     def test_encapsulate_flyability(self):
-        """Test encapsulate_flyability reshaping."""
+        """Test encapsulate_flyability reshaping (after altitude binning removal)."""
         nb_cells = 2
-        nb_altitudes = 5
+        nb_altitudes = 1  # Changed from 5
         other_dim = 45
         humidity_dim = 2
 
@@ -266,5 +266,5 @@ class TestModelCellsEncapsulateFlyability:
             [wind, other, rain],
         )
 
-        # Check output shape: (batch, nb_cells, nb_altitudes)
+        # Check output shape: (batch, nb_cells, 1) after altitude binning removal
         assert output.shape == (batch_size, nb_cells, nb_altitudes)

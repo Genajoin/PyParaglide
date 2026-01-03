@@ -174,3 +174,53 @@ with open('neural_network/bin/data/flights_by_cell_day_spot.pkl', 'wb') as f:
 - 46_13 (46°N, 13°E) — 6,393 полёта
 - 45_13 (45°N, 13°E) — 3,468 полётов
 - 46_14 (46°N, 14°E) — 1,049 полётов
+
+---
+
+## Крупное обновление: Удаление altitude binning (2026-01-03)
+
+### Изменения в модели CELLS
+
+**Удалён altitude binning** - модель больше не разделяет полёты по 5 высотным уровням (600/700/800/900/1000 hPa).
+
+**До (после Issue #16 PR #17):**
+```python
+(datetime, (score, lat, lon, takeoff_alt, mountainess))
+#         [0]    [1][0] [1][1] [1][2] [1][3]      [1][4]
+```
+
+**После (текущее):**
+```python
+(datetime, (score, lat, lon))
+#         [0]    [1][0] [1][1] [1][2]
+```
+
+### Убраны поля:
+- **`takeoff_alt`** - использовался для altitude binning, теперь агрегирован
+- **`mountainess`** - перелётное значение, теперь из `mountainess_by_cell_alt.pkl` (усреднённое)
+
+### Модельные изменения:
+1. **`nb_altitudes`**: 5 → 1
+2. **Формы тензоров:**
+   - Входы: `(batch, nb_cells, nb_altitudes, ...)` → `(batch, nb_cells, 1, ...)`
+   - Выходы: `(batch, nb_cells, nb_altitudes)` → `(batch, nb_cells, 1)`
+3. **Wind:** усредняется по 5 altitude levels
+4. **Mountainess:** усредняется по 5 altitude levels
+
+### Файлы изменены:
+- `flight_processor.py` - tuple: 7 полей → 3 поля
+- `dataset.py` - агрегация без altitude binning
+- `trainer.py` - `nb_altitudes = 1`, обновлены формы тензоров
+- `model_cells.py` - input/output shapes для nb_altitudes=1
+- `layers.py` - удалён altitude tiling во всех блоках
+- `forecast.py` - nb_altitudes=1, агрегация в inference
+
+### Влияние на обучение:
+- Модель упрощена: 20 выходов (4×5) → 4 выхода
+- Потеряна информация о altitude-specific условиях
+- Требуется полное переобучение модели
+
+### TODO:
+- Оптимизация: mountainess хранится дублированно (per-flight в PKL и per-cell в отдельном файле)
+- Можно вычислять mountainess на лету из DEM/lat/lon
+

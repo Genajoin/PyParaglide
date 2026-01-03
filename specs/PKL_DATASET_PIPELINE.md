@@ -66,17 +66,18 @@
 
 Список полётов по ячейкам и дням.
 
-- Тип: `List[List[Tuple[str, Tuple[float, float, float, float, float, float, float]]]]`
+- Тип: `List[List[Tuple[str, Tuple[float, float, float]]]]`
 - Размер списка: `nb_days * nb_cells`
 - Индекс: `day_idx * nb_cells + cell_idx`
 - Один полёт:
-  - `("YYYY-MM-DD HH:MM:SS", (score, alt, plaf, lat, lon, takeoff_alt, mountainess))`
-    - `score`: XC score (баллы) из `parse_igc_with_libs.py`, используется для crossability (порог 60)
-    - `alt`: дополнительный параметр (в коде напрямую не используется)
-    - `plaf`: потолок (макс. высота), используется в аналитике
-    - `lat`, `lon`: координаты старта
-    - `takeoff_alt`: высота старта (используется для kAltitude)
-    - `mountainess`: дубль значения по ячейке
+  - `("YYYY-MM-DD HH:MM:SS", (score, lat, lon))`
+    - `score`: XC score (баллы) из xContest API, используется для crossability (порог 60)
+    - `lat`, `lon`: координаты старта (используются для super-resolution позиционирования)
+
+**Примечание:** Altitude binning удалён. Ранее структура включала `alt`, `plaf`, `takeoff_alt`, `mountainess`:
+- `alt` и `plaf` были из IGC файлов (недоступны в xContest JSON)
+- `takeoff_alt` использовался для биннинга по высотам (теперь агрегированы)
+- `mountainess` теперь берётся из отдельного файла `mountainess_by_cell_alt.pkl` (усреднённая)
 
 ### 1.8 `spots.pkl`, `spots_merged.pkl`
 
