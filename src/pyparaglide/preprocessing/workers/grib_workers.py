@@ -20,10 +20,17 @@ from typing import List, Tuple, Optional
 import numpy as np
 
 
-def file_reader(file_queue, job_queue, gfs_dir, stop_event):
+def file_reader(file_queue, job_queue, gfs_dir, stop_event, include_grib_path=False):
     """
     Reader Thread (Main Process): SEQUENTIAL HDD I/O.
     Reads GRIB from HDD, writes copy to /dev/shm (RAM), puts PATH into job_queue.
+
+    Args:
+        file_queue: Queue with (day_date, hour) tuples
+        job_queue: Queue for (day_date, hour, temp_path, grib_path) results
+        gfs_dir: Path to GFS GRIB files directory
+        stop_event: Threading event to stop processing
+        include_grib_path: If True, include original GRIB path in job_queue (for caching)
     """
     temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else tempfile.gettempdir()
 
@@ -43,7 +50,10 @@ def file_reader(file_queue, job_queue, gfs_dir, stop_event):
         )
 
         if not os.path.exists(grb_path):
-            job_queue.put((day_date, hour, None))  # Missing file
+            if include_grib_path:
+                job_queue.put((day_date, hour, None, grb_path))  # Missing file
+            else:
+                job_queue.put((day_date, hour, None))  # Missing file
             continue
 
         try:
@@ -57,27 +67,50 @@ def file_reader(file_queue, job_queue, gfs_dir, stop_event):
                 f.write(data)
 
             # 3. Pass PATH to workers (avoid pickling 500MB data)
-            job_queue.put((day_date, hour, temp_path))
+            if include_grib_path:
+                job_queue.put((day_date, hour, temp_path, grb_path))
+            else:
+                job_queue.put((day_date, hour, temp_path))
 
         except Exception:
-            job_queue.put((day_date, hour, None))
+            if include_grib_path:
+                job_queue.put((day_date, hour, None, grb_path))
+            else:
+                job_queue.put((day_date, hour, None))
 
 
-def file_processor(job_queue, hourly_queue, grib_params, cells_latlon):
+def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir=None):
     """
     Worker Process (Separate CPU Core): CPU INTENSIVE.
     Reads from RAM disk, parses GRIB, extracts values.
+
+    Args:
+        job_queue: Queue with (day_date, hour, temp_path) tuples
+        hourly_queue: Queue for (day_date, hour, values) results
+        grib_params: List of 65 GRIB parameters to extract
+        cells_latlon: List of (lat, lon) cell coordinates
+        cache_dir: Path to GRIB cache directory (None = disable cache)
     """
     # Re-import inside process
     from pyparaglide.preprocessing.workers.grib_reader import InMemoryGribReader
+    from pyparaglide.preprocessing.cache import GribCache
 
     if InMemoryGribReader is None:
         # No GRIB reader available, just consume the queue
         while True:
             try:
-                day_date, hour, temp_path = job_queue.get()
+                item = job_queue.get()
             except Exception:
                 break
+            # Handle both 3-tuple and 4-tuple formats
+            if len(item) == 3:
+                day_date, hour, temp_path = item
+                grib_path = None
+            elif len(item) == 4:
+                day_date, hour, temp_path, grib_path = item
+            else:
+                break
+
             if day_date is None:
                 break
             hourly_queue.put((day_date, hour, None))
@@ -91,10 +124,22 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon):
     # Ignore SIGINT in workers, let main process handle cleanup
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
+    # Initialize cache if enabled
+    cache = GribCache(cache_dir) if cache_dir else None
+
     while True:
         try:
-            day_date, hour, temp_path = job_queue.get()
+            item = job_queue.get()
         except Exception:
+            break
+
+        # Handle both 3-tuple and 4-tuple formats
+        if len(item) == 3:
+            day_date, hour, temp_path = item
+            grib_path = None
+        elif len(item) == 4:
+            day_date, hour, temp_path, grib_path = item
+        else:
             break
 
         if day_date is None:  # Sentinel
@@ -103,6 +148,28 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon):
         if temp_path is None:  # Missing file
             hourly_queue.put((day_date, hour, None))
             continue
+
+        # Check cache if enabled and grib_path is provided
+        if cache and grib_path:
+            try:
+                config = {
+                    'bbox': None,  # Will be validated by is_valid
+                    'nb_cells': len(cells_latlon),
+                }
+                if cache.is_valid(grib_path, config):
+                    # Load from cache - fast path!
+                    values = cache.load(grib_path)
+                    hourly_queue.put((day_date, hour, values))
+                    # Cleanup temp file
+                    if os.path.exists(temp_path):
+                        try:
+                            os.remove(temp_path)
+                        except:
+                            pass
+                    continue
+            except Exception:
+                # Cache miss or error, fall through to GRIB parsing
+                pass
 
         grb_reader = None
         try:
@@ -123,6 +190,21 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon):
                 hourly_queue.put((day_date, hour, values))
             else:
                 hourly_queue.put((day_date, hour, values))
+
+                # Save to cache if enabled and grib_path is provided
+                if cache and grib_path and values is not None:
+                    try:
+                        # Reshape flat values to (nb_cells, 65) for cache
+                        cached_values = np.array(values, dtype=np.float32).reshape(len(cells_latlon), len(grib_params))
+                        cache.save(
+                            grib_path,
+                            cached_values,
+                            config={'bbox': None, 'nb_cells': len(cells_latlon), 'cells_latlon': cells_latlon},
+                            params=grib_params,
+                        )
+                    except Exception as cache_err:
+                        # Don't fail if cache save fails
+                        print(f"[WARNING] Failed to cache {day_date} {hour}:00: {cache_err}")
 
         except Exception as e:
             print(f"[ERROR] {day_date} {hour}:00 - {type(e).__name__}: {str(e)[:100]}")
