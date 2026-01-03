@@ -315,6 +315,7 @@ class Trainer:
         batch_size: int = 32,
         validation_split: float = 0.0,
         use_validation_set: bool = False,
+        early_stopping_patience: int = 0,
         freeze_crossability: bool = False,
     ) -> dict:
         """
@@ -338,13 +339,28 @@ class Trainer:
         self.model.compile(optimizer="adam", loss="binary_crossentropy" if self.problem_formulation == ProblemFormulation.CLASSIFICATION else "mse")
 
         # Prepare validation split
-        if use_validation_set:
-            # Use every 2nd day for validation
+        # If validation_split > 0, use Keras random split (by samples)
+        # Otherwise, use alternating days (by days) for time-series consistency
+        use_keras_val_split = validation_split > 0.0
+
+        if use_keras_val_split:
+            # Use Keras validation_split: random split by samples
+            # Train on all data, Keras will handle the split internally
+            train_indices = np.arange(self.nb_days)
+            val_indices = np.array([])
+            keras_validation_split = validation_split
+            print(f"[INFO] Using Keras validation_split={validation_split} (random by samples)")
+        elif use_validation_set:
+            # Use alternating days for validation (time-series consistency)
             val_indices = np.arange(0, self.nb_days, 2)
             train_indices = np.arange(1, self.nb_days, 2)
+            keras_validation_split = 0.0
+            print(f"[INFO] Using alternating days for validation (days {val_indices[:5].tolist()}... for val)")
         else:
+            # No validation
             val_indices = np.array([])
             train_indices = np.arange(self.nb_days)
+            keras_validation_split = 0.0
 
         # Prepare callbacks
         log_file = self.models_dir / f"{self.model_type.name.lower()}.log"
@@ -353,21 +369,46 @@ class Trainer:
             TrainingLogger(self.model_type, log_file),
         ]
 
-        # Prepare data
-        X_train = [x[train_indices] for x in X]
-        Y_train = [y[train_indices] for y in Y]
+        # Add EarlyStopping if validation is enabled
+        # Works with both alternating days (val_indices) and Keras validation_split
+        has_validation = len(val_indices) > 0 or use_keras_val_split
+        if early_stopping_patience > 0 and has_validation:
+            from pyparaglide.training.early_stopping import EarlyStopping
+            callbacks.append(
+                EarlyStopping(
+                    monitor="val_loss",
+                    patience=early_stopping_patience,
+                    min_delta=0.001,
+                    restore_best_weights=True,
+                    verbose=1,
+                )
+            )
+            print(f"[INFO] EarlyStopping enabled: patience={early_stopping_patience}")
 
-        val_data = None
-        if len(val_indices) > 0:
-            X_val = [x[val_indices] for x in X]
-            Y_val = [y[val_indices] for y in Y]
-            val_data = (X_val, Y_val)
+        # Prepare data
+        if use_keras_val_split:
+            # For Keras validation_split, pass all data
+            # Keras will randomly split by samples
+            X_train = X
+            Y_train = Y
+            val_data = None
+        else:
+            # For alternating days or no validation, manually split
+            X_train = [x[train_indices] for x in X]
+            Y_train = [y[train_indices] for y in Y]
+
+            val_data = None
+            if len(val_indices) > 0:
+                X_val = [x[val_indices] for x in X]
+                Y_val = [y[val_indices] for y in Y]
+                val_data = (X_val, Y_val)
 
         # Train
         history = self.model.fit(
             X_train,
             Y_train,
             validation_data=val_data,
+            validation_split=keras_validation_split if use_keras_val_split else None,
             epochs=nb_epochs,
             batch_size=batch_size,
             shuffle=True,

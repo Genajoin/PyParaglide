@@ -11,7 +11,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dateutil.rrule import rrule, DAILY
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Event
 from typing import Literal
 
 import pygrib
@@ -62,6 +62,19 @@ class GFSDownloader:
         self.workers = workers
         self.filter_grib = filter_grib
         self.min_file_size = 10 * 1024 * 1024  # 10 MB
+        
+        # Initialize tqdm lock for thread safety
+        tqdm.set_lock(Lock())
+        # Event to signal threads to stop on interrupt
+        self._abort_event = Event()
+
+        # Check and report proxies
+        self.proxies = urllib.request.getproxies()
+        if self.proxies:
+            print("Network Configuration:")
+            for proto, proxy in self.proxies.items():
+                print(f"  Using {proto.upper()} proxy: {proxy}")
+            print()
 
     def download_range(
         self,
@@ -78,6 +91,8 @@ class GFSDownloader:
         Returns:
             Dictionary with statistics
         """
+        self._abort_event.clear()
+
         # Parse dates
         if isinstance(start_date, str):
             start_date = dt.datetime.strptime(start_date, "%Y-%m-%d").date()
@@ -125,8 +140,10 @@ class GFSDownloader:
                 # Sequential mode
                 with tqdm(total=total_tasks, desc="Files", unit="file") as pbar:
                     for task_id, day, hour in tasks:
+                        if self._abort_event.is_set():
+                            break
                         pbar.set_postfix_str(f"{day.strftime('%Y-%m-%d')} {hour:02d}:00")
-                        result = self._download_file(day, hour)
+                        result = self._download_file(day, hour, progress_position=None)
                         update_stats(result)
                         pbar.update(1)
             else:
@@ -135,25 +152,37 @@ class GFSDownloader:
                     with ThreadPoolExecutor(max_workers=self.workers) as executor:
                         futures = {}
                         for task_id, day, hour in tasks:
-                            future = executor.submit(self._download_file, day, hour)
+                            if self._abort_event.is_set():
+                                break
+                            # Calculate position (1-based, since 0 is main bar)
+                            pos = (task_id % self.workers) + 1
+                            future = executor.submit(self._download_file, day, hour, pos)
                             futures[future] = (task_id, day, hour)
 
-                        for future in as_completed(futures):
-                            task_id, day, hour = futures[future]
-                            try:
-                                result = future.result()
-                                update_stats(result)
-                                main_pbar.set_postfix_str(f"{day.strftime('%Y-%m-%d')} {hour:02d}:00")
-                            except Exception:
-                                with stats_lock:
-                                    stats["failed"] += 1
-                            main_pbar.update(1)
+                        try:
+                            for future in as_completed(futures):
+                                task_id, day, hour = futures[future]
+                                try:
+                                    result = future.result()
+                                    update_stats(result)
+                                    main_pbar.set_postfix_str(f"{day.strftime('%Y-%m-%d')} {hour:02d}:00")
+                                except Exception:
+                                    with stats_lock:
+                                        stats["failed"] += 1
+                                main_pbar.update(1)
+                        except KeyboardInterrupt:
+                            # Cancel remaining futures to stop processing queue
+                            self._abort_event.set()
+                            for future in futures:
+                                future.cancel()
+                            raise
 
         except KeyboardInterrupt:
             print()
             print("Download interrupted by user.")
             print("Partial files can be resumed on next run.")
-            return stats
+            self._abort_event.set()
+            raise
 
         # Print statistics
         print()
@@ -164,7 +193,7 @@ class GFSDownloader:
 
         return stats
 
-    def _download_file(self, day: dt.date, hour: int) -> dict:
+    def _download_file(self, day: dt.date, hour: int, progress_position: int | None = None) -> dict:
         """
         Download a single GFS file.
 
@@ -193,9 +222,43 @@ class GFSDownloader:
         resume_pos = 0
         if dest_path.exists():
             resume_pos = dest_path.stat().st_size
+            
+        # Get remote size for progress bar (optional, might fail or be slow)
+        remote_size = None
+        try:
+            req = urllib.request.Request(url, method='HEAD')
+            with urllib.request.urlopen(req, timeout=5) as response:
+                if 'Content-Length' in response.headers:
+                    remote_size = int(response.headers['Content-Length'])
+        except Exception:
+            pass
+
+        # Create progress bar
+        file_pbar = None
+        if progress_position is not None and remote_size:
+            file_pbar = tqdm(
+                total=remote_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024*1024,
+                position=progress_position,
+                leave=False,
+                desc=f"{dth.strftime('%m-%d %H:%M')}",
+                initial=resume_pos,
+                disable=False
+            )
+
+        def progress_callback(downloaded, total):
+            if file_pbar:
+                file_pbar.n = downloaded
+                file_pbar.refresh()
 
         # Download
-        result = self._download_with_resume(url, dest_path, resume_pos)
+        try:
+            result = self._download_with_resume(url, dest_path, resume_pos, progress_callback)
+        finally:
+            if file_pbar:
+                file_pbar.close()
 
         if result == "skip":
             return {"status": "skipped", "fname": legacy_fname, "size_mb": 0}
@@ -216,7 +279,13 @@ class GFSDownloader:
         else:
             return {"status": "failed", "fname": legacy_fname, "size_mb": 0}
 
-    def _download_with_resume(self, url: str, dest_path: Path, resume_pos: int) -> Literal[True, False, "skip"]:
+    def _download_with_resume(
+        self, 
+        url: str, 
+        dest_path: Path, 
+        resume_pos: int, 
+        progress_callback=None
+    ) -> Literal[True, False, "skip"]:
         """
         Download a file with resume support.
 
@@ -242,21 +311,41 @@ class GFSDownloader:
                         return "skip"
                     else:
                         raise urllib.error.HTTPError(url, response.status, response.reason, None, None)
+                        
+                    # Get total size if available for progress callback
+                    total_size = None
+                    if 'Content-Length' in response.headers:
+                        content_length = int(response.headers['Content-Length'])
+                        if response.status == 200:
+                            total_size = content_length
+                        else:
+                            total_size = resume_pos + content_length
+
+                        if progress_callback and total_size:
+                            progress_callback(resume_pos, total_size)
 
                     # Download
-                    chunk_size = 8192
+                    chunk_size = 131072
+                    downloaded = resume_pos
                     with open(dest_path, mode) as f:
                         while True:
+                            if self._abort_event.is_set():
+                                return False
                             chunk = response.read(chunk_size)
                             if not chunk:
                                 break
                             f.write(chunk)
+                            downloaded += len(chunk)
+                            if progress_callback and total_size:
+                                progress_callback(downloaded, total_size)
 
                 return True
 
             except urllib.error.HTTPError as e:
                 if e.code == 404:
                     return False
+                if e.code == 416:
+                    return "skip"
                 if attempt < self.max_retries - 1:
                     import time
 
