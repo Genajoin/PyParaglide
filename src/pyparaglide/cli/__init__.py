@@ -418,8 +418,10 @@ def train(
     epochs: int = typer.Option(55, "--epochs", "-e", help="Number of training epochs"),
     batch_size: int = typer.Option(32, "--batch-size", "-b", help="Batch size"),
     validation: bool = typer.Option(True, "--validation/--no-validation", help="Use validation set"),
+    validation_split: float = typer.Option(0.0, "--validation-split", "-v", help="Validation split: 0=alternating days (default), 0.2=Keras random split (0.0-1.0)"),
     super_resolution: int = typer.Option(1, "--super-res", "-s", help="Super-resolution factor"),
     load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights (CELLS only)"),
+    early_stopping_patience: int = typer.Option(0, "--early-stopping-patience", "-p", help="Early stopping patience (0 = disabled, requires --validation)"),
 ) -> None:
     """
     Train a PyParaglide model.
@@ -520,8 +522,10 @@ def train(
             lr_init=lr_init,
             lr_end=lr_end,
             validation=validation,
+            validation_split=validation_split,
             super_resolution=super_resolution,
             load_weights=load_weights,
+            early_stopping_patience=early_stopping_patience,
         )
     else:
         # SPOTS: Train one model per cell
@@ -535,7 +539,9 @@ def train(
             lr_init=lr_init,
             lr_end=lr_end,
             validation=validation,
+            validation_split=validation_split,
             super_resolution=super_resolution,
+            early_stopping_patience=early_stopping_patience,
         )
 
 
@@ -549,8 +555,10 @@ def _train_cells(
     lr_init: float,
     lr_end: float,
     validation: bool,
+    validation_split: float,
     super_resolution: int,
     load_weights: bool,
+    early_stopping_patience: int,
 ) -> None:
     """Train CELLS model (all cells at once)."""
     console.print(f"[dim]Data directory: {data_dir}[/dim]")
@@ -586,6 +594,8 @@ def _train_cells(
         nb_epochs=epochs,
         batch_size=batch_size,
         use_validation_set=validation,
+        validation_split=validation_split,
+        early_stopping_patience=early_stopping_patience,
     )
 
     # Save
@@ -612,7 +622,9 @@ def _train_spots(
     lr_init: float,
     lr_end: float,
     validation: bool,
+    validation_split: float,
     super_resolution: int,
+    early_stopping_patience: int,
 ) -> None:
     """Train SPOTS models (one per cell)."""
     trained_count = 0
@@ -662,6 +674,8 @@ def _train_spots(
                 nb_epochs=epochs,
                 batch_size=batch_size,
                 use_validation_set=validation,
+                validation_split=validation_split,
+                early_stopping_patience=early_stopping_patience,
             )
 
             # Save with cell suffix
@@ -681,6 +695,213 @@ def _train_spots(
     console.print(f"Trained: [cyan]{trained_count}[/cyan] cells")
     if skipped_count > 0:
         console.print(f"Skipped: [yellow]{skipped_count}[/yellow] cells")
+
+
+@app.command()
+def evaluate(
+    year: int = typer.Option(2025, "--year", "-y", help="Year to use for testing"),
+    data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
+    models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
+    threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
+    model_type: str = typer.Option("cells", "--model", "-m", help="Model type: 'cells' or 'spots'"),
+    output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC), 'wind_flown', 'humidity_flown' (CELLS only)"),
+) -> None:
+    """
+    Evaluate trained model performance on a specific test year.
+
+    Calculates:
+    - Confusion Matrix (True/False Positives/Negatives)
+    - Classification Report (Precision, Recall, F1)
+    - ROC-AUC Score
+
+    Available outputs for CELLS:
+    - flown: Basic flyability (default)
+    - crossed: XC cross-country potential
+    - wind_flown: Wind-based indicator
+    - humidity_flown: Rain-based indicator
+
+    Example:
+        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed
+    """
+    import numpy as np
+    from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+    from rich.panel import Panel
+
+    settings = get_settings()
+
+    # Use defaults from settings if not specified
+    if data_dir is None:
+        data_dir = settings.pkl_dir
+    if models_dir is None:
+        models_dir = settings.models_dir
+
+    # Parse model type
+    try:
+        model_type_enum = ModelType[model_type.upper()]
+    except KeyError:
+        console.print(f"[red]Invalid model type: {model_type}[/red]")
+        console.print("Valid options: [cyan]cells[/cyan], [cyan]spots[/cyan]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Evaluating {model_type_enum.name} model on year {year}[/bold cyan]")
+    console.print(f"[dim]Data: {data_dir}[/dim]")
+    console.print(f"[dim]Models: {models_dir}[/dim]")
+    console.print(f"[dim]Threshold: {threshold}[/dim]\n")
+
+    # Initialize Trainer
+    trainer = Trainer(
+        data_dir=data_dir,
+        model_type=model_type_enum,
+        problem_formulation=ProblemFormulation.CLASSIFICATION,
+        models_dir=models_dir,
+    )
+
+    # Find indices for the test year
+    # dataset.meteo_days contains all available days
+    test_indices = [
+        i for i, d in enumerate(trainer.dataset.meteo_days)
+        if d.year == year
+    ]
+
+    if not test_indices:
+        years = sorted(list(set(d.year for d in trainer.dataset.meteo_days)))
+        console.print(f"[red]Error: No data found for year {year}[/red]")
+        console.print(f"Available years: {years}")
+        raise typer.Exit(1)
+
+    console.print(f"[green]Found {len(test_indices)} days for testing[/green]")
+
+    # Map output name to index
+    # CELLS: [flown, crossed, wind_flown, humidity_flown]
+    # SPOTS: [flown]
+    output_map = {
+        "flown": 0,
+        "crossed": 1,
+        "wind_flown": 2,
+        "humidity_flown": 3,
+    }
+
+    # Validate output parameter
+    if output not in output_map:
+        console.print(f"[red]Invalid output: {output}[/red]")
+        if model_type_enum == ModelType.SPOTS:
+            console.print("SPOTS model only supports: 'flown'")
+        else:
+            console.print(f"Valid options: {list(output_map.keys())}")
+        raise typer.Exit(1)
+
+    # For SPOTS, only 'flown' is available
+    if model_type_enum == ModelType.SPOTS and output != "flown":
+        console.print(f"[red]SPOTS model only supports 'flown' output, not '{output}'[/red]")
+        raise typer.Exit(1)
+
+    output_idx = output_map[output]
+    console.print(f"[dim]Evaluating output: {output} (index {output_idx})[/dim]\n")
+
+    # Prepare data
+    console.print("[yellow]Preparing data (this might take a moment)...[/yellow]")
+
+    # For SPOTS, only use cells that have spots
+    if model_type_enum == ModelType.SPOTS:
+        spots_by_cell = trainer.dataset.get_spots()
+        cells_with_spots = [c for c in range(trainer.nb_cells) if c in spots_by_cell and spots_by_cell[c]]
+        if not cells_with_spots:
+            console.print("[red]Error: No cells with spots found[/red]")
+            raise typer.Exit(1)
+        console.print(f"[dim]Found {len(cells_with_spots)} cells with spots: {cells_with_spots}[/dim]")
+        cells_to_use = cells_with_spots
+    else:
+        cells_to_use = list(range(trainer.nb_cells))
+
+    # Prepare data for selected cells
+    X_full, Y_full = trainer.prepare_data(cells=cells_to_use)
+
+    # Filter for test year
+    # X is [Date, Dow, (Mountain), Other, Rain, Wind]
+    X_test = [x[test_indices] for x in X_full]
+
+    # Y is list of outputs. For CELLS: [Flown, Crossed, Wind_flown, Humidity_flown]
+    # We use the selected output
+    Y_test_raw = [y[test_indices] for y in Y_full]
+
+    # Check if output index exists
+    if output_idx >= len(Y_test_raw):
+        console.print(f"[red]Error: Output index {output_idx} not available (model has {len(Y_test_raw)} outputs)[/red]")
+        raise typer.Exit(1)
+
+    # Flatten for global evaluation
+    # Y_test_raw[output_idx] shape: (nb_days, nb_cells * super_res^2 * nb_alts) OR (nb_days, nb_spots)
+    y_true = Y_test_raw[output_idx].flatten()
+
+    # Load Model & Predict
+    console.print("[yellow]Loading model and predicting...[/yellow]")
+    trainer.create_model(cells=cells_to_use, load_weights=True)
+
+    preds = trainer.model.predict(X_test, verbose=1)
+
+    # Check if predictions have the selected output
+    if output_idx >= len(preds):
+        console.print(f"[red]Error: Prediction output index {output_idx} not available[/red]")
+        raise typer.Exit(1)
+
+    # Flatten predictions
+    y_pred_prob = preds[output_idx].flatten()
+
+    # Calculate Metrics
+    y_pred_bool = (y_pred_prob >= threshold).astype(int)
+    y_true_int = y_true.astype(int)
+
+    # Confusion Matrix - handle case where all labels are the same
+    unique_labels = sorted(set(y_true_int) | set(y_pred_bool))
+    if len(unique_labels) < 2:
+        console.print(f"\n[yellow]Warning: Only one class present in data ({unique_labels})[/yellow]")
+        console.print("[yellow]Cannot compute confusion matrix and classification metrics[/yellow]")
+
+        # Basic stats
+        total_samples = len(y_true_int)
+        pos_pred = int(y_pred_bool.sum())
+        neg_pred = total_samples - pos_pred
+        pos_true = int(y_true_int.sum())
+        neg_true = total_samples - pos_true
+
+        console.print(f"\n[bold]Basic Statistics[/bold]")
+        console.print(f"Total samples: {total_samples:,}")
+        console.print(f"Actual positives: [cyan]{pos_true:,}[/cyan], negatives: [cyan]{neg_true:,}[/cyan]")
+        console.print(f"Predicted positives: [cyan]{pos_pred:,}[/cyan], negatives: [cyan]{neg_pred:,}[/cyan]")
+        return
+
+    # Both classes present - compute full metrics
+    cm = confusion_matrix(y_true_int, y_pred_bool, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+    
+    # ROC AUC
+    try:
+        auc = roc_auc_score(y_true_int, y_pred_prob)
+        auc_str = f"{auc:.4f}"
+    except ValueError:
+        auc_str = "N/A"
+
+    # Display Results
+    console.print(f"\n[bold]RESULTS (Threshold: {threshold})[/bold]")
+    
+    # Confusion Matrix Table
+    cm_table = Table(title="Confusion Matrix", show_header=True)
+    cm_table.add_column("Type", style="cyan")
+    cm_table.add_column("Count", style="bold")
+    cm_table.add_column("Meaning", style="dim")
+    
+    cm_table.add_row("True Negatives", f"[green]{tn:,}[/green]", "Correctly predicted NOT flyable")
+    cm_table.add_row("False Positives", f"[red]{fp:,}[/red]", "Predicted flyable, but wasn't (Wasted trip)")
+    cm_table.add_row("False Negatives", f"[yellow]{fn:,}[/yellow]", "Predicted NOT flyable, but was (Missed day)")
+    cm_table.add_row("True Positives", f"[green]{tp:,}[/green]", "Correctly predicted flyable")
+    
+    console.print(cm_table)
+    
+    # Metrics Panel
+    report = classification_report(y_true_int, y_pred_bool, target_names=['Not Flyable', 'Flyable'])
+    summary = f"ROC AUC Score: [bold magenta]{auc_str}[/bold magenta]\n\n{report}"
+    
+    console.print(Panel(summary, title="[bold]Detailed Metrics[/bold]", border_style="cyan"))
 
 
 @app.command()
