@@ -4,6 +4,7 @@ PyParaglide CLI - Command-line interface for paragliding flyability forecasting.
 This module provides the main CLI entry point using Typer.
 """
 
+import warnings
 from importlib import metadata
 from pathlib import Path
 
@@ -11,6 +12,11 @@ import typer
 from rich.console import Console
 from rich.table import Table
 from tqdm import tqdm
+
+# Suppress warnings from dependencies
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message=".*is ill-defined.*")
+warnings.filterwarnings("ignore", message=".*ROC AUC score.*")
 
 from pyparaglide import __version__
 from pyparaglide.analysis import FlightAnalyzer, MeteoAnalyzer
@@ -898,7 +904,9 @@ def evaluate(
     console.print(cm_table)
     
     # Metrics Panel
-    report = classification_report(y_true_int, y_pred_bool, target_names=['Not Flyable', 'Flyable'])
+    report = classification_report(
+        y_true_int, y_pred_bool, target_names=['Not Flyable', 'Flyable'], zero_division=0
+    )
     summary = f"ROC AUC Score: [bold magenta]{auc_str}[/bold magenta]\n\n{report}"
     
     console.print(Panel(summary, title="[bold]Detailed Metrics[/bold]", border_style="cyan"))

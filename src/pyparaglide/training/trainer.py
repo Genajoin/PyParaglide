@@ -199,8 +199,9 @@ class Trainer:
                 cells, self.nb_altitudes, super_resolution, self.problem_formulation == ProblemFormulation.REGRESSION
             )
             # Reshape each output to (nb_days, len(cells) * super_resolution^2, nb_altitudes)
+            # Use F-order because output is organized as [cell0_day0, cell0_day1, ..., cell1_day0, ...]
             return [
-                out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, self.nb_altitudes))
+                out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, self.nb_altitudes), order='F')
                 for out in outputs
             ]
         else:
