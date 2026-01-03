@@ -19,13 +19,13 @@ class WindFlyabilityBlock(tf.keras.Model):
     """
     Wind flyability prediction block.
 
-    Input shape: (batch, nb_cells, nb_altitudes, 3)
-    Output shape: (batch, nb_cells, nb_altitudes)
+    Input shape: (batch, nb_cells, 1, 3)
+    Output shape: (batch, nb_cells, 1)
     """
 
     def __init__(self, nb_altitudes: int, nb_cells: int, humidity_dim: int, name: str = "wind_flyability_block"):
         super().__init__(name=name)
-        self.nb_altitudes = nb_altitudes
+        self.nb_altitudes = nb_altitudes  # Always 1
         self.nb_cells = nb_cells
         self.humidity_dim = humidity_dim
         self.dropout_rate = 0.05
@@ -36,8 +36,8 @@ class WindFlyabilityBlock(tf.keras.Model):
         self.dense2 = tf.keras.layers.Dense(1, activation="sigmoid", name="WindFlyability_2")
 
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
-        # Input: (batch, nb_cells, nb_altitudes, 3)
-        # Reshape to (batch * nb_cells * nb_altitudes, 3) - flatten everything except last dim
+        # Input: (batch, nb_cells, 1, 3)
+        # Reshape to (batch * nb_cells, 3) - squeeze altitude dimension
         x = tf.reshape(inputs, (-1, 3))
 
         x = self.dropout1(x, training=training)
@@ -45,20 +45,19 @@ class WindFlyabilityBlock(tf.keras.Model):
         x = self.dropout2(x, training=training)
         x = self.dense2(x)
 
-        # Reshape back to (batch, nb_cells, nb_altitudes)
-        return tf.reshape(x, (-1, self.nb_cells, self.nb_altitudes))
+        # Reshape back to (batch, nb_cells, 1)
+        return tf.reshape(x, (-1, self.nb_cells, 1))
 
 
 class HumidityFlyabilityBlock(tf.keras.Model):
     """
-    Humidity/Rain flyability prediction block.
+    Humidity/Rain flyability prediction block (simplified for nb_altitudes=1).
 
     Predicts flyability based on humidity/rain data.
     """
 
     def __init__(self, nb_altitudes: int, nb_cells: int, humidity_dim: int, name: str = "humidity_flyability_block"):
         super().__init__(name=name)
-        self.nb_altitudes = nb_altitudes
         self.nb_cells = nb_cells
         self.humidity_dim = humidity_dim
         self.dropout_rate = 0.05
@@ -68,17 +67,17 @@ class HumidityFlyabilityBlock(tf.keras.Model):
         self.dense1 = tf.keras.layers.Dense(4, activation="tanh", name="RainFlyability_1")
         self.dropout2 = tf.keras.layers.Dropout(self.dropout_rate)
         self.dense2 = tf.keras.layers.Dense(1, activation="sigmoid", name="RainFlyability_2")
-        self.tile = tf.keras.layers.Lambda(
-            lambda x: tf.tile(tf.reshape(x, (-1, nb_cells, 1)), (1, 1, nb_altitudes))
-        )
+        # Output shape: (batch, nb_cells, 1) - no tiling needed
 
     def call(self, inputs: tf.Tensor, training: bool = False) -> tf.Tensor:
-        x = self.reshape(inputs)
+        # Input: (batch, nb_cells, 3, humidity_dim)
+        x = self.reshape(inputs)  # (batch * nb_cells, 3 * humidity_dim)
         x = self.dropout1(x, training=training)
         x = self.dense1(x)
         x = self.dropout2(x, training=training)
-        x = self.dense2(x)
-        return self.tile(x)
+        x = self.dense2(x)  # (batch * nb_cells, 1)
+        # Reshape to (batch, nb_cells, 1)
+        return tf.reshape(x, (-1, self.nb_cells, 1))
 
 
 class FlyabilityBlock(tf.keras.Model):
@@ -152,8 +151,8 @@ class CrossabilityBlock(tf.keras.Model):
 
         self.reshape = tf.keras.layers.Lambda(
             lambda x: [
-                tf.reshape(x[0], (-1, nb_altitudes)),  # flyability
-                tf.reshape(x[1], (-1, nb_altitudes * self.nbH)),  # wind
+                tf.reshape(x[0], (-1, 1)),  # flyability: (batch, nb_cells, 1) -> (batch*nb_cells, 1)
+                tf.reshape(x[1], (-1, self.nbH)),  # wind: (batch, nb_cells, 1, 3) -> (batch*nb_cells, 3)
                 tf.reshape(x[2], (-1, self.nbH * other_dim)),  # other
                 tf.reshape(x[3], (-1, self.nbH * humidity_dim)),  # rain
             ]
@@ -169,9 +168,6 @@ class CrossabilityBlock(tf.keras.Model):
         self.act2 = tf.keras.layers.Activation("tanh")
         self.dropout3 = tf.keras.layers.Dropout(self.dropout_rate)
         self.dense3 = tf.keras.layers.Dense(1, activation="sigmoid", name="Fufu_2")
-        self.tile = tf.keras.layers.Lambda(
-            lambda x: tf.tile(tf.reshape(x, (-1, nb_cells, 1)), (1, 1, nb_altitudes))
-        )
 
     def call(self, inputs: list[tf.Tensor], training: bool = False) -> tf.Tensor:
         flyability, fufu_wind, fufu_other, fufu_rain = inputs
@@ -191,7 +187,8 @@ class CrossabilityBlock(tf.keras.Model):
 
         x = self.dropout3(x, training=training)
         x = self.dense3(x)
-        return self.tile(x)
+        # Reshape to (batch, nb_cells, 1) - no tiling needed
+        return tf.reshape(x, (-1, self.nb_cells, 1))
 
 
 class WindBlockCells(tf.keras.layers.Layer):
@@ -322,7 +319,8 @@ class WindBlockSpots(tf.keras.layers.Layer):
             # Compute wind factor using dot product
             wind_factor = tf.einsum("bi,i->b", x_reshaped, tf.reshape(self.windWeights[s, :], (self.wind_dim,)))
             wind_factor_each_alt = tf.reshape(wind_factor, (-1, nb_altitudes))
-            wind_factor_relevant_alt = tf.einsum("ba,a->b", wind_factor_each_alt, tf.squeeze(interpolation_kernel))
+            # Use reshape instead of squeeze to preserve rank when nb_altitudes=1
+            wind_factor_relevant_alt = tf.einsum("ba,a->b", wind_factor_each_alt, tf.reshape(interpolation_kernel, [-1]))
             wind_factor_relevant_alt = tf.reshape(wind_factor_relevant_alt, (-1, 3))
 
             results.append(wind_factor_relevant_alt)
@@ -419,11 +417,11 @@ class PopulationBlock(tf.keras.layers.Layer):
 
     def call(self, inputs: list[tf.Tensor]) -> tf.Tensor:
         """
-        Apply population model to predictions.
+        Apply population model to predictions (simplified for nb_altitudes=1).
 
         Args:
             inputs: [prediction, date, dow]
-                - prediction: (batch, nbCells, nbAltitudes)
+                - prediction: (batch, nbCells, 1)
                 - date: (batch, 1)
                 - dow: (batch, 7)
 
@@ -435,12 +433,12 @@ class PopulationBlock(tf.keras.layers.Layer):
         # Expand prediction to super resolution (use repeat_elements like original)
         prediction = tf.keras.backend.repeat_elements(
             prediction, self.super_resolution * self.super_resolution, axis=1
-        )  # (batch, nbCells*super_resolution^2, nbAltitudes)
+        )  # (batch, nbCells*super_resolution^2, 1)
 
         # Tile population weights
         popu_reshaped = tf.reshape(
             self.popu, (1, int(self.popu.shape[0]), int(self.popu.shape[1]))
-        )  # (1, nbCells*super_resolution^2, nbAltitudes)
+        )  # (1, nbCells*super_resolution^2, 1)
         tiled_popu = tf.tile(popu_reshaped, (tf.shape(prediction)[0], 1, 1))
 
         # Compute day factor (seasonality * day of week)
@@ -452,7 +450,7 @@ class PopulationBlock(tf.keras.layers.Layer):
         # KEY FIX: first element is 1 (batch dim), not tf.shape(tiled_popu)[0]
         day_factor_vector = tf.tile(
             day_factor_vector, (1, int(tiled_popu.shape[1]), int(tiled_popu.shape[2]))
-        )  # (batch, nbCells*super_resolution^2, nbAlts)
+        )  # (batch, nbCells*super_resolution^2, 1)
         tiled_popu = day_factor_vector * tiled_popu
 
         # Apply population model

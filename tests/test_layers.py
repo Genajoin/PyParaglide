@@ -26,7 +26,7 @@ class TestWindBlockCells:
         """Test building and calling WindBlockCells."""
         layer = WindBlockCells()
         nb_cells = 2
-        nb_altitudes = 5
+        nb_altitudes = 1
         batch_size = 4
 
         # Create inputs
@@ -81,25 +81,25 @@ class TestWindFlyabilityBlock:
 
     def test_build_and_call(self):
         """Test building and calling WindFlyabilityBlock."""
-        nb_altitudes = 5
+        nb_altitudes = 1  # Changed from 5
         nb_cells = 2
         humidity_dim = 2
 
         layer = WindFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
         batch_size = 4
 
-        # Create input: (batch, nb_cells, nb_altitudes, 3)
-        x = tf.constant(np.random.randn(batch_size, nb_cells, nb_altitudes, 3), dtype=tf.float32)
+        # Create input: (batch, nb_cells, 1, 3)
+        x = tf.constant(np.random.randn(batch_size, nb_cells, 1, 3), dtype=tf.float32)
 
         # Call layer
         output = layer(x)
 
-        # Check output shape: (batch, nb_cells, nb_altitudes)
-        assert output.shape == (batch_size, nb_cells, nb_altitudes)
+        # Check output shape: (batch, nb_cells, 1)
+        assert output.shape == (batch_size, nb_cells, 1)
 
     def test_output_range(self):
         """Test that output is in [0, 1] range (sigmoid activation)."""
-        nb_altitudes = 5
+        nb_altitudes = 1  # Changed from 5
         nb_cells = 1
         humidity_dim = 2
 
@@ -107,7 +107,7 @@ class TestWindFlyabilityBlock:
         batch_size = 10
 
         # Create input with various values
-        x = tf.constant(np.random.randn(batch_size, nb_cells, nb_altitudes, 3) * 10, dtype=tf.float32)
+        x = tf.constant(np.random.randn(batch_size, nb_cells, 1, 3) * 10, dtype=tf.float32)
 
         output = layer(x)
 
@@ -122,7 +122,7 @@ class TestHumidityFlyabilityBlock:
 
     def test_build_and_call(self):
         """Test building and calling HumidityFlyabilityBlock."""
-        nb_altitudes = 5
+        nb_altitudes = 1
         nb_cells = 2
         humidity_dim = 2
 
@@ -140,7 +140,7 @@ class TestHumidityFlyabilityBlock:
 
     def test_output_range(self):
         """Test that output is in [0, 1] range (sigmoid activation)."""
-        nb_altitudes = 5
+        nb_altitudes = 1
         nb_cells = 1
         humidity_dim = 2
 
@@ -205,7 +205,7 @@ class TestPopulationBlock:
     def test_build_and_call_classification(self):
         """Test PopulationBlock with CLASSIFICATION formulation."""
         nb_cells = 2
-        nb_altitudes = 5
+        nb_altitudes = 1
         super_resolution = 1
 
         var_date_factor = tf.Variable(np.array([[1.275]], dtype=np.float32))
@@ -238,7 +238,7 @@ class TestPopulationBlock:
     def test_build_and_call_regression(self):
         """Test PopulationBlock with REGRESSION formulation."""
         nb_cells = 1
-        nb_altitudes = 5
+        nb_altitudes = 1
         super_resolution = 1
 
         var_date_factor = tf.Variable(np.array([[1.275]], dtype=np.float32))
@@ -300,7 +300,7 @@ class TestWindBlockSpots:
 
         layer = WindBlockSpots(nb_spots)
         batch_size = 4
-        nb_altitudes = 5
+        nb_altitudes = 1
 
         # Create input: (batch, nb_altitudes, 3, wind_dim)
         x = tf.constant(np.random.randn(batch_size, nb_altitudes, 3, 8), dtype=tf.float32)
@@ -327,7 +327,7 @@ class TestCrossabilityBlock:
 
     def test_build_and_call(self):
         """Test building and calling CrossabilityBlock."""
-        nb_altitudes = 5
+        nb_altitudes = 1
         nb_cells = 2
         other_dim = 45
         humidity_dim = 2
@@ -349,7 +349,7 @@ class TestCrossabilityBlock:
 
     def test_output_range(self):
         """Test that output is in [0, 1] range (sigmoid activation)."""
-        nb_altitudes = 5
+        nb_altitudes = 1
         nb_cells = 1
         other_dim = 10
         humidity_dim = 2

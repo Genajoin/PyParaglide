@@ -224,12 +224,13 @@ class Dataset:
         self, cells: list[int], nb_altitudes: int, super_resolution: int, regression: bool
     ) -> list[np.ndarray]:
         """
-        Get flight data grouped by altitude for CELLS model.
+        Get aggregated flight data for CELLS model (altitude binning removed).
 
         Returns 4 arrays: flyability, crossability, wind_flyability, humidity_flyability
+        Shape: (4, len(cells) * super_resolution^2 * nb_days, 1)
         """
         res = [
-            np.zeros((len(cells) * super_resolution * super_resolution * self.nb_days, nb_altitudes), dtype=np.float32)
+            np.zeros((len(cells) * super_resolution * super_resolution * self.nb_days, 1), dtype=np.float32)
             for _ in range(4)
         ]
 
@@ -243,7 +244,8 @@ class Dataset:
             for k_dc, dc in enumerate(lines):
                 for flight in self.flights_by_cell_day[dc]:
                     # Calculate super-resolution cell position
-                    lat, lon = flight[1][3], flight[1][4]
+                    # New tuple: (datetime, (score, lat, lon))
+                    lat, lon = flight[1][1], flight[1][2]
                     sr_x = int(((lon + 0.5) % 1.0) * super_resolution)
                     sr_y = int(((lat + 0.5) % 1.0) * super_resolution)
                     flight_list[sr_y * super_resolution + sr_x][k_dc].append(flight)
@@ -254,24 +256,21 @@ class Dataset:
                 for daycell in flight_list[sr_idx]:
                     if len(daycell) > 0:
                         if regression:
-                            for k_alt in range(nb_altitudes):
-                                flown = sum(1 for f in daycell if self._k_altitude(f[1][5]) == k_alt)
-                                crossed = sum(1 for f in daycell if self._k_altitude(f[1][5]) == k_alt and f[1][0] >= points_limit)
+                            # Aggregate all flights (no altitude binning)
+                            flown = len(daycell)
+                            crossed = sum(1 for f in daycell if f[1][0] >= points_limit)
 
-                                res[0][res_line, k_alt] = flown
-                                res[1][res_line, k_alt] = crossed
-                                res[2][res_line, k_alt] = flown
-                                res[3][res_line, k_alt] = flown
+                            res[0][res_line, 0] = flown
+                            res[1][res_line, 0] = crossed
+                            res[2][res_line, 0] = flown
+                            res[3][res_line, 0] = flown
                         else:
-                            flown_alts = {self._k_altitude(f[1][5]) for f in daycell}
-                            crossed_alts = {self._k_altitude(f[1][5]) for f in daycell if f[1][0] >= points_limit}
-
-                            for alt in flown_alts:
-                                res[0][res_line, alt] = 1.0
-                                res[2][res_line, alt] = 1.0
-                                res[3][res_line, alt] = 1.0
-                            for alt in crossed_alts:
-                                res[1][res_line, alt] = 1.0
+                            # Binary: any flight = 1.0
+                            res[0][res_line, 0] = 1.0
+                            crossed = any(f[1][0] >= points_limit for f in daycell)
+                            res[1][res_line, 0] = 1.0 if crossed else 0.0
+                            res[2][res_line, 0] = 1.0
+                            res[3][res_line, 0] = 1.0
 
                     res_line += 1
 
@@ -325,28 +324,19 @@ class Dataset:
         # Convert list to dict: [[spots_cell_0], [spots_cell_1], ...] -> {0: [...], 1: [...]}
         return {i: spots for i, spots in enumerate(self.spots_by_cell) if spots}
 
-    @staticmethod
-    def _barometric_leveling(altitude: float) -> float:
-        """Convert altitude to pressure level (hPa)."""
-        return 1013.25 * pow((1.0 - 0.0065 * altitude / 288.15), 5.255)
-
-    @staticmethod
-    def _k_altitude(altitude: float) -> int:
-        """Convert altitude to altitude index (0-4 for 5 levels)."""
-        pressure = Dataset._barometric_leveling(altitude)
-        return max(0, min(4, int((1050 - pressure) // 100)))
-
     def get_mountainess(self, cells: list[int], nb_altitudes: int) -> np.ndarray:
         """
-        Get mountainess values for cells.
+        Get averaged mountainess values for cells (altitude binning removed).
 
-        Returns array of shape (nb_cells, nb_altitudes)
+        Returns array of shape (nb_cells, 1) - averaged over all 5 altitudes
         """
         mountainess = []
         for c in cells:
-            cell_mountainess = [self.mountainess_by_cell_alt[c][alt] for alt in range(nb_altitudes)]
-            mountainess.extend(cell_mountainess)
-        return np.array(mountainess, dtype=np.float32).reshape(len(cells), nb_altitudes)
+            # Average over all 5 altitudes (stored in mountainess_by_cell_alt)
+            cell_avg = np.mean([self.mountainess_by_cell_alt[c][alt] for alt in range(5)])
+            mountainess.append(cell_avg)
+
+        return np.array(mountainess, dtype=np.float32).reshape(-1, 1)
 
 
 def convert_wind_matrix(wind_matrix: np.ndarray, wind_dim: int) -> np.ndarray:
