@@ -56,6 +56,42 @@ class Forecaster:
         # Mountainess data (loaded from models_dir)
         self.mountainess_data: np.ndarray | None = None
 
+    def _detect_nb_cells_from_weights(self) -> int:
+        """
+        Detect nb_cells from the weights file by reading PopulationBlock kernel shape.
+
+        Returns:
+            Number of cells detected from weights
+        """
+        weight_path = self.models_dir / f"{self.model_type.name.lower()}.weights.h5"
+
+        import h5py
+
+        with h5py.File(weight_path, "r") as f:
+            # Find PopulationBlock layer and read its kernel shape
+            kernel_shape = None
+            for key in f["layers"].keys():
+                if "population_block" in key and "vars" in f[f"layers/{key}"]:
+                    # Find kernel variable (largest shape)
+                    vars_list = list(f[f"layers/{key}/vars"].keys())
+                    shapes = [f[f"layers/{key}/vars/{v}"].shape for v in vars_list]
+                    # kernel has shape (nb_cells, nb_altitudes), find it by max size
+                    kernel_idx = max(range(len(shapes)), key=lambda i: shapes[i][0] * shapes[i][1] if len(shapes[i]) == 2 else 0)
+                    kernel_shape = shapes[kernel_idx]
+                    break
+
+            if kernel_shape is None:
+                raise ValueError(
+                    f"Could not find PopulationBlock kernel in weights file: {weight_path}"
+                )
+
+            # kernel_shape = (nb_cells * super_resolution^2, nb_altitudes)
+            nb_cells_from_weights = kernel_shape[0]
+            print(
+                f"[INFO] Detected {nb_cells_from_weights} cells from weights file (kernel shape: {kernel_shape})"
+            )
+            return nb_cells_from_weights
+
     def load_model(self) -> None:
         """Load trained model and normalization coefficients."""
         # Load normalization
@@ -64,6 +100,9 @@ class Forecaster:
             self.normalization = Normalization.load(norm_path)
         else:
             raise FileNotFoundError(f"Normalization file not found: {norm_path}")
+
+        # Detect nb_cells from weights file before creating model
+        self.nb_cells = self._detect_nb_cells_from_weights()
 
         # Create and load model
         if self.model_type == ModelType.CELLS:
@@ -90,7 +129,7 @@ class Forecaster:
             )
 
         # Load weights
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}_weights.h5"
+        weight_path = self.models_dir / f"{self.model_type.name.lower()}.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded model from {weight_path}")
