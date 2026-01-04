@@ -1,11 +1,9 @@
 """
 ModelCells - Grid-based flyability prediction model.
 
-Predicts flyability for 1°×1° grid cells with multiple outputs:
+Predicts flyability for 1°×1° grid cells with 2 outputs:
 - flown: Overall probability of flights
 - crossed: Cross-country potential
-- wind_flown: Wind-based flyability
-- humidity_flown: Humidity-based flyability
 """
 
 from typing import Any
@@ -17,10 +15,8 @@ from pyparaglide.models.enums import ModelSettings, ModelType, ProblemFormulatio
 from pyparaglide.models.layers import (
     CrossabilityBlock,
     FlyabilityBlock,
-    HumidityFlyabilityBlock,
     PopulationBlock,
     WindBlockCells,
-    WindFlyabilityBlock,
 )
 
 
@@ -28,22 +24,18 @@ class ModelCells:
     """
     Grid-based (CELLS) model for paragliding flyability prediction.
 
-    After altitude binning removal (2026-01-03):
-    Output names (4 total - aggregated over all altitudes):
+    After removing redundant indicators (2026-01-04):
+    Output names (2 total):
         - flown: Overall flight probability
         - crossed: Cross-country potential
-        - wind_flown: Wind-based flyability
-        - humidity_flown: Humidity/rain-based flyability
     """
 
     @classmethod
     def output_names(cls) -> list[str]:
-        """Return the names of all model outputs (after altitude binning removal)."""
+        """Return the names of all model outputs."""
         return [
             "flown",
             "crossed",
-            "wind_flown",
-            "humidity_flown",
         ]
 
     @classmethod
@@ -127,8 +119,6 @@ class ModelCells:
         crossability_block = CrossabilityBlock(
             other_dim, humidity_dim, nb_altitudes, nb_cells, name="crossability_block"
         )
-        wind_flyability_block = WindFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
-        humidity_flyability_block = HumidityFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
 
         # Create separate population blocks for each output
         # (Original uses single block, but requires all inputs to have same shape)
@@ -156,8 +146,6 @@ class ModelCells:
         crossability_prediction = crossability_block(
             [flyability_prediction, wind_prediction, input_other, input_humidity]
         )
-        wind_flyability_prediction = wind_flyability_block(wind_prediction)
-        humidity_flyability_prediction = humidity_flyability_block(input_humidity)
 
         # ==============================================================================
         # Apply population (separate blocks for each output)
@@ -165,8 +153,6 @@ class ModelCells:
 
         flown_prediction = population_block([flyability_prediction, input_date, input_dow])
         crossed_prediction = population_block([crossability_prediction, input_date, input_dow])
-        wind_flown_prediction = population_block([wind_flyability_prediction, input_date, input_dow])
-        humidity_flown_prediction = population_block([humidity_flyability_prediction, input_date, input_dow])
 
         # ==============================================================================
         # Create model
@@ -174,7 +160,7 @@ class ModelCells:
 
         return tf.keras.Model(
             all_inputs,
-            [flown_prediction, crossed_prediction, wind_flown_prediction, humidity_flown_prediction],
+            [flown_prediction, crossed_prediction],
         )
 
     @staticmethod

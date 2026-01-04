@@ -72,20 +72,16 @@ class TrainingLogger(tf.keras.callbacks.Callback):
         str_lr = f" lr: {lr:.2e}"
 
         if self.model_type == ModelType.CELLS:
-            # Legacy output names for shared PopulationBlock
+            # Legacy output names for shared PopulationBlock (2 outputs after removing indicators)
             possible_losses = [
                 "population_block_loss",
                 "population_block_1_loss",
-                "population_block_2_loss",
-                "population_block_3_loss",
             ]
-            
+
             # Also check for named outputs (if distinct blocks were used or named outputs)
             possible_losses.extend([
-                "population_block_flown_loss", 
-                "population_block_crossed_loss", 
-                "population_block_wind_loss", 
-                "population_block_humidity_loss"
+                "population_block_flown_loss",
+                "population_block_crossed_loss",
             ])
 
             # Filter to keep only those present in logs

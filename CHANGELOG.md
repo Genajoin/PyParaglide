@@ -5,6 +5,32 @@ All notable changes to PyParaglide will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-01-04
+
+### Breaking Changes
+- **Removed redundant indicator outputs** from CELLS model
+  - `wind_flown` and `humidity_flown` outputs removed
+  - CELLS model now has 2 outputs: `flown` and `crossed` (previously 4)
+  - **Existing model checkpoints are incompatible** - retraining required
+
+### Removed
+- `WindFlyabilityBlock` layer (redundant - `FlyabilityBlock` already considers all factors)
+- `HumidityFlyabilityBlock` layer (redundant - `FlyabilityBlock` already considers all factors)
+- CLI `--output wind_flown` and `--output humidity_flown` options
+
+### Changed
+- `ModelCells.output_names()` returns `['flown', 'crossed']`
+- `Dataset.get_flights_by_altitude()` returns 2 arrays instead of 4
+- Forecaster JSON output no longer includes `wind_flyability` and `humidity_flyability` fields
+- Training callbacks now track 2 losses instead of 4
+- Updated documentation to reflect 2-output architecture
+
+### Benefits
+- Simpler model architecture
+- Reduced memory usage (2 outputs vs 4)
+- Faster training/inference (fewer computations)
+- Cleaner API
+
 ## [2.0.0] - 2025-01-01
 
 ### Added

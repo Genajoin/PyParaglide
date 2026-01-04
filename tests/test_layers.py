@@ -10,11 +10,9 @@ from pyparaglide.models.enums import ProblemFormulation
 from pyparaglide.models.layers import (
     CrossabilityBlock,
     FlyabilityBlock,
-    HumidityFlyabilityBlock,
     PopulationBlock,
     WindBlockCells,
     WindBlockSpots,
-    WindFlyabilityBlock,
 )
 
 
@@ -73,87 +71,6 @@ class TestWindBlockCells:
 
         # Output should be different
         assert not np.allclose(output1.numpy(), output2.numpy())
-
-
-@pytest.mark.usefixtures("reset_tf_session")
-class TestWindFlyabilityBlock:
-    """Test WindFlyabilityBlock layer."""
-
-    def test_build_and_call(self):
-        """Test building and calling WindFlyabilityBlock."""
-        nb_altitudes = 1  # Changed from 5
-        nb_cells = 2
-        humidity_dim = 2
-
-        layer = WindFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
-        batch_size = 4
-
-        # Create input: (batch, nb_cells, 1, 3)
-        x = tf.constant(np.random.randn(batch_size, nb_cells, 1, 3), dtype=tf.float32)
-
-        # Call layer
-        output = layer(x)
-
-        # Check output shape: (batch, nb_cells, 1)
-        assert output.shape == (batch_size, nb_cells, 1)
-
-    def test_output_range(self):
-        """Test that output is in [0, 1] range (sigmoid activation)."""
-        nb_altitudes = 1  # Changed from 5
-        nb_cells = 1
-        humidity_dim = 2
-
-        layer = WindFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
-        batch_size = 10
-
-        # Create input with various values
-        x = tf.constant(np.random.randn(batch_size, nb_cells, 1, 3) * 10, dtype=tf.float32)
-
-        output = layer(x)
-
-        # All values should be in [0, 1]
-        assert np.all(output.numpy() >= 0.0)
-        assert np.all(output.numpy() <= 1.0)
-
-
-@pytest.mark.usefixtures("reset_tf_session")
-class TestHumidityFlyabilityBlock:
-    """Test HumidityFlyabilityBlock layer."""
-
-    def test_build_and_call(self):
-        """Test building and calling HumidityFlyabilityBlock."""
-        nb_altitudes = 1
-        nb_cells = 2
-        humidity_dim = 2
-
-        layer = HumidityFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
-        batch_size = 4
-
-        # Create input: (batch, nb_cells, 3, humidity_dim)
-        x = tf.constant(np.random.randn(batch_size, nb_cells, 3, humidity_dim), dtype=tf.float32)
-
-        # Call layer
-        output = layer(x)
-
-        # Check output shape: (batch, nb_cells, nb_altitudes)
-        assert output.shape == (batch_size, nb_cells, nb_altitudes)
-
-    def test_output_range(self):
-        """Test that output is in [0, 1] range (sigmoid activation)."""
-        nb_altitudes = 1
-        nb_cells = 1
-        humidity_dim = 2
-
-        layer = HumidityFlyabilityBlock(nb_altitudes, nb_cells, humidity_dim)
-        batch_size = 10
-
-        x = tf.constant(np.random.randn(batch_size, nb_cells, 3, humidity_dim) * 10, dtype=tf.float32)
-
-        output = layer(x)
-
-        # All values should be in [0, 1]
-        assert np.all(output.numpy() >= 0.0)
-        assert np.all(output.numpy() <= 1.0)
 
 
 @pytest.mark.usefixtures("reset_tf_session")

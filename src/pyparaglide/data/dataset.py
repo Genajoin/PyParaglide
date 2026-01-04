@@ -226,12 +226,12 @@ class Dataset:
         """
         Get aggregated flight data for CELLS model (altitude binning removed).
 
-        Returns 4 arrays: flyability, crossability, wind_flyability, humidity_flyability
-        Shape: (4, len(cells) * super_resolution^2 * nb_days, 1)
+        Returns 2 arrays: flyability, crossability
+        Shape: (2, len(cells) * super_resolution^2 * nb_days, 1)
         """
         res = [
             np.zeros((len(cells) * super_resolution * super_resolution * self.nb_days, 1), dtype=np.float32)
-            for _ in range(4)
+            for _ in range(2)
         ]
 
         res_line = 0
@@ -262,15 +262,11 @@ class Dataset:
 
                             res[0][res_line, 0] = flown
                             res[1][res_line, 0] = crossed
-                            res[2][res_line, 0] = flown
-                            res[3][res_line, 0] = flown
                         else:
                             # Binary: any flight = 1.0
                             res[0][res_line, 0] = 1.0
                             crossed = any(f[1][0] >= points_limit for f in daycell)
                             res[1][res_line, 0] = 1.0 if crossed else 0.0
-                            res[2][res_line, 0] = 1.0
-                            res[3][res_line, 0] = 1.0
 
                     res_line += 1
 

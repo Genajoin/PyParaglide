@@ -99,6 +99,12 @@ class Settings(BaseSettings):
     # Directory for elevation tiles
     elevation_dir: str = "data/elevation"
 
+    # Elevation data source: SRTM1 (30m) or SRTM3 (90m)
+    elevation_source: str = "SRTM3"
+
+    # Auto-download elevation if missing during build-dataset
+    elevation_auto_download: bool = True
+
     # ==============================================================================
     # Forecast Parameters
     # ==============================================================================

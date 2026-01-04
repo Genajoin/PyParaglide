@@ -118,19 +118,17 @@ src/pyparaglide/
 │         └──────────────────┼────────────────────┘             │
 │                            ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐      │
-│  │  PopulationBlock (4 separate instances)             │      │
+│  │  PopulationBlock (2 separate instances)             │      │
 │  │  - Expands prediction by super_resolution^2        │      │
 │  │  - Applies pilot population model                 │      │
 │  │  - Date & day-of-week factors                      │      │
 │  └─────────────────────────────────────────────────────┘      │
 │                            │                                  │
-│                  ┌───────────┼───────────┐                    │
-│                  ▼           ▼           ▼                    │
-│  Outputs: (4 × nb_cells × super_resolution^2 × nb_altitudes) │
+│                  ┌───────────┴───────────┐                    │
+│                  ▼                       ▼                    │
+│  Outputs: (2 × nb_cells × super_resolution^2 × nb_altitudes) │
 │  ├── flown (overall flight probability)                  │
-│  ├── crossed (cross-country potential)                   │
-│  ├── wind_flown (wind-based flyability)                  │
-│  └── humidity_flown (rain-based flyability)              │
+│  └── crossed (cross-country potential)                   │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -140,8 +138,6 @@ src/pyparaglide/
 | Layer | Purpose | Input Shape | Output Shape |
 |-------|---------|-------------|--------------|
 | `WindBlockCells` | Wind terrain adjustment | `(batch, nb_cells, nb_altitudes, 3, wind_dim)` | `(batch, nb_cells, nb_altitudes, 3)` |
-| `WindFlyabilityBlock` | Wind-based flyability | `(batch, nb_cells, nb_altitudes, 3)` | `(batch, nb_cells, nb_altitudes)` |
-| `HumidityFlyabilityBlock` | Rain-based flyability | `(batch, nb_cells, 3, humidity_dim)` | `(batch, nb_cells, nb_altitudes)` |
 | `FlyabilityBlock` | Combined flyability | `(3,)`, `(3*other_dim,)`, `(3*humidity_dim,)` | `(1,)` |
 | `CrossabilityBlock` | Cross-country potential | Multiple inputs | `(batch, nb_cells, nb_altitudes)` |
 | `PopulationBlock` | Pilot behavior model | `(pred, date, dow)` | `(batch, nb_cells*sr^2, nb_altitudes)` |
