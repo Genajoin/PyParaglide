@@ -457,19 +457,29 @@ def download_analysis(
 
 @download_app.command("forecast")
 def download_forecast(
-    date: str = typer.Option(..., "--date", "-d", help="Target date (YYYY-MM-DD)"),
+    days: int = typer.Option(10, "--days", "-D", help="Number of days ahead to download from latest forecast run"),
+    date: str = typer.Option(None, "--date", "-d", help="Specific target date (YYYY-MM-DD)"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
     data_dir: str = typer.Option(None, "--data-dir", "-o", help="Output directory for GRIB files"),
     hours: str = typer.Option("6,12,18", "--hours", "-H", help="Forecast hours to download (comma-separated)"),
+    force: bool = typer.Option(False, "--force", "-f", help="Redownload existing files"),
 ) -> None:
     """
     Download GFS Forecast data (for generating predictions).
 
     Downloads GFS Forecast GRIB files from NOMADS for generating flyability predictions.
-    Files are saved as YYYYMMDD-HH.grib2 in the forecasts subdirectory.
+    Automatically finds the best available forecast run and uses correct forecast offsets.
+
+    MODES:
+    1. --days N   : Download N days ahead from latest forecast run (default)
+    2. --date D   : Download forecast for specific date
+    3. --start S --end E : Download for date range
 
     Examples:
-        pyparaglide download forecast --date 2025-01-04
-        pyparaglide download forecast --date 2025-01-04 --hours 6,12,18
+        pyparaglide dl forecast --days 10
+        pyparaglide dl forecast --date 2026-01-05
+        pyparaglide dl forecast --start 2026-01-05 --end 2026-01-15
     """
     import datetime as dt
 
@@ -478,29 +488,77 @@ def download_forecast(
     if data_dir is None:
         data_dir = settings.gfs_dir
 
-    # Parse target date
-    try:
-        target_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
-    except ValueError:
-        console.print(f"[red]Invalid date format: {date}[/red]")
-        console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
-        raise typer.Exit(1)
-
-    console.print(f"[bold cyan]Downloading GFS Forecast data[/bold cyan]")
-    console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
-    console.print(f"[dim]Hours: {hours}[/dim]\n")
-
-    # Create downloader
-    downloader = GFSForecastDownloader(
-        data_dir=data_dir,
-    )
-
     # Parse hours
     hour_list = [int(h.strip()) for h in hours.split(",")]
+
+    # Create downloader
+    downloader = GFSForecastDownloader(data_dir=data_dir)
     downloader.forecast_hours = hour_list
 
-    # Download
-    stats = downloader.download_day(target_date)
+    # Determine download mode
+    if date:
+        # Single date mode
+        if start_date or end_date:
+            console.print("[red]Error: --date cannot be used with --start/--end[/red]")
+            raise typer.Exit(1)
+
+        try:
+            target_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            console.print(f"[red]Invalid date format: {date}[/red]")
+            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+            raise typer.Exit(1)
+
+        console.print(f"[bold cyan]Downloading GFS Forecast data[/bold cyan]\n")
+        console.print(f"[dim]Mode: Single date[/dim]")
+        console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
+        console.print(f"[dim]Hours: {hours}[/dim]")
+        if force:
+            console.print(f"[dim]Force: Enabled (will re-download existing files)[/dim]")
+        console.print()
+
+        stats = downloader.download_day(target_date, force=force)
+
+    elif start_date and end_date:
+        # Date range mode
+        try:
+            start = dt.datetime.strptime(start_date, "%Y-%m-%d").date()
+            end = dt.datetime.strptime(end_date, "%Y-%m-%d").date()
+        except ValueError:
+            console.print("[red]Invalid date format[/red]")
+            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+            raise typer.Exit(1)
+
+        console.print(f"[bold cyan]Downloading GFS Forecast data[/bold cyan]\n")
+        console.print(f"[dim]Mode: Date range[/dim]")
+        console.print(f"[dim]Range: {start.isoformat()} to {end.isoformat()}[/dim]")
+        console.print(f"[dim]Hours: {hours}[/dim]")
+        if force:
+            console.print(f"[dim]Force: Enabled (will re-download existing files)[/dim]")
+        console.print()
+
+        stats = {"downloaded": 0, "skipped": 0, "failed": 0, "total_mb": 0.0}
+
+        current = start
+        while current <= end:
+            day_stats = downloader.download_day(current, force=force)
+            stats["downloaded"] += day_stats["downloaded"]
+            stats["skipped"] += day_stats["skipped"]
+            stats["failed"] += day_stats["failed"]
+            stats["total_mb"] += day_stats["total_mb"]
+            current += dt.timedelta(days=1)
+
+    else:
+        # Days ahead mode (default)
+        console.print(f"[bold cyan]Downloading GFS Forecast data[/bold cyan]\n")
+        console.print(f"[dim]Mode: Days ahead from latest run[/dim]")
+        console.print(f"[dim]Days: {days}[/dim]")
+        console.print(f"[dim]Hours: {hours}[/dim]")
+        if force:
+            console.print(f"[dim]Force: Enabled (will re-download existing files)[/dim]")
+        console.print()
+
+        stats = downloader.download_days_ahead(days=days, force=force)
 
     # Print summary
     console.print(f"\n[bold]Download Summary:[/bold]")

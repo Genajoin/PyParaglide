@@ -129,26 +129,36 @@ pyparaglide forecast
 | `pyparaglide version` | Show version information |
 | `pyparaglide config` | Show current configuration |
 | `pyparaglide info` | Show system information |
-| `pyparaglide download` | Download GFS weather data |
+| `pyparaglide download` | Download GFS analysis + elevation (legacy) |
+| `pyparaglide dl analysis` | Download GFS analysis data (historical) |
+| `pyparaglide dl forecast` | Download GFS forecast data (predictions) |
+| `pyparaglide dl elevation` | Download SRTM elevation data |
 | `pyparaglide build-dataset` | Build PKL dataset from GRIB + flights |
 | `pyparaglide analyze` | Analyze flights and weather data |
 | `pyparaglide train` | Train neural network model |
 | `pyparaglide forecast` | Generate flyability forecast |
 
-### Example: Data Download
+### Data Download
+
+#### GFS Analysis Data (Historical Weather)
+
+GFS Analysis data is historical weather data used for **training** models:
 
 ```bash
 # Use dates from .env (TRAINING_DATES)
-pyparaglide download
+pyparaglide dl analysis
 
 # Single range
-pyparaglide download --dates 2024-06-01:2024-08-31
+pyparaglide dl analysis --dates 2024-06-01:2024-08-31
 
 # Multiple ranges
-pyparaglide download --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
+pyparaglide dl analysis --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
 
-# With parallel downloads
-pyparaglide download --dates 2024-06-01:2024-08-31 --workers 4 --filter
+# Legacy format (single range)
+pyparaglide dl analysis --start 2024-06-01 --end 2024-08-31
+
+# With parallel downloads and filtering
+pyparaglide dl analysis --dates 2024-06-01:2024-08-31 --workers 4 --filter
 ```
 
 **Date Format Priority:**
@@ -156,26 +166,74 @@ pyparaglide download --dates 2024-06-01:2024-08-31 --workers 4 --filter
 2. `--start/--end` (legacy format, single range)
 3. `.env` TRAINING_DATES (default)
 
+#### GFS Forecast Data (Predictions)
+
+GFS Forecast data is used for **generating predictions**:
+
+```bash
+# Download next 10 days from latest forecast run (default)
+pyparaglide dl forecast --days 10
+
+# Download for specific date
+pyparaglide dl forecast --date 2026-01-05
+
+# Download for date range
+pyparaglide dl forecast --start 2026-01-05 --end 2026-01-15
+
+# Force re-download (overwrite existing files)
+pyparaglide dl forecast --days 10 --force
+```
+
+**How it works:**
+- Automatically finds the latest available GFS forecast run from NOMADS
+- Calculates correct forecast offsets (f006, f012, f018, etc.)
+- Downloads for 3 hours per day: 06:00, 12:00, 18:00 UTC
+- Files are named by **valid time**: `YYYYMMDD-HH.grib2`
+
+#### Elevation Data
+
+```bash
+# Download SRTM elevation data (uses BBOX from .env)
+pyparaglide dl elevation
+
+# Download with custom bbox
+pyparaglide dl elevation --bbox 45,47,13,15
+```
+
+#### Legacy Command (Backward Compatible)
+
+```bash
+# Legacy flat command (downloads analysis + elevation)
+pyparaglide download --dates 2024-06-01:2024-08-31
+```
+
 ### Example: Training
 
 ```bash
-# Train with 10 cells for 55 epochs
-pyparaglide train --cell 10 --epochs 55 --batch-size 32
+# Train SPOTS model for cell 10 with 55 epochs
+pyparaglide train -m spots --cell 10 --epochs 55 --batch-size 32
+
+# Train CELLS model (all cells at once)
+pyparaglide train -m cells --epochs 55
 
 # Train with specific learning rate
-pyparaglide train --cell 5 --lr-init 0.01 --lr-end 0.001
+pyparaglide train -m spots --cell 5 --lr-init 0.01 --lr-end 0.001
+
+# Train multiple cells
+pyparaglide train -m spots --cell 0,1,2,3,4 --epochs 55
 
 # Train without validation
-pyparaglide train --cell 10 --no-validation
+pyparaglide train -m spots --cell 10 --no-validation
 ```
 
 ### Example: Forecast
 
 ```bash
-# Generate 10-day forecast (default)
+# Generate forecast (requires GFS forecast data in data/gfs/forecasts/)
 pyparaglide forecast
 
-# Generate with custom output directory
+# Generate for specific date
+pyparaglide forecast --date 2026-01-05
 pyparaglide forecast --output-dir /path/to/output
 
 # Show debug information
@@ -305,9 +363,41 @@ mypy src/
 
 ### Weather Data (GFS)
 
-PyParaglide uses NOAA GFS (Global Forecast System) weather data:
-- **GFS Analysis** (2021+): AWS S3 (NOAA Open Data)
-- **GFS Analysis** (2000-2021): NCAR RDA (requires free registration)
+PyParaglide uses NOAA GFS (Global Forecast System) weather data from two sources:
+
+#### GFS Analysis (Historical - for Training)
+
+GFS Analysis is **historical weather data** used for **training** models:
+
+| Source | Years | Access | Download Command |
+|--------|-------|--------|------------------|
+| AWS S3 (NOAA Open Data) | 2021+ | Public, free | `pyparaglide dl analysis` |
+| NCAR RDA | 2000-2021 | Requires free registration | Manual download required |
+
+**Usage:** Train models with historical flight data
+```bash
+pyparaglide dl analysis --dates 2024-06-01:2024-08-31
+```
+
+#### GFS Forecast (Predictions - for Forecasting)
+
+GFS Forecast is **future weather prediction** used for **generating forecasts**:
+
+| Source | Latency | Access | Download Command |
+|--------|---------|--------|------------------|
+| NOMADS API | ~6 hours | Public, free | `pyparaglide dl forecast` |
+
+**Usage:** Generate flyability predictions for upcoming days
+```bash
+# Download next 10 days from latest GFS run
+pyparaglide dl forecast --days 10
+```
+
+**How it works:**
+- NOMADS provides GFS forecast runs 4 times daily (00, 06, 12, 18 UTC)
+- Each run contains predictions up to 16 days ahead (f000 to f384)
+- PyParaglide automatically finds the latest run and calculates correct offsets
+- Downloads 3 forecast hours per day: 06:00, 12:00, 18:00 UTC
 
 ### Elevation Data (SRTM)
 
