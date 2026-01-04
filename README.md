@@ -20,20 +20,11 @@ PyParaglide is a modernized fork of [Paraglidable](https://github.com/Genajoin/P
 ### Key Features
 
 - **Neural Network Forecasts** — Uses TensorFlow 2.x to predict flyability for 1°×1° grid cells
-- **Multiple Outputs** — Predicts overall flyability, cross-country potential, wind-based and rain-based indicators
+- **2 Output Model** — Predicts overall flyability and cross-country potential
 - **5 Altitude Levels** — Separate predictions for 600hPa, 700hPa, 800hPa, 900hPa, 1000hPa
 - **GFS Weather Data** — Uses NOAA GFS Analysis/Forecast data
 - **CLI-First Design** — Modern command-line interface with Typer + Rich
-
-### What's New in PyParaglide
-
-- ✅ **TensorFlow 2.15+** — Migrated from TF 1.15
-- ✅ **Python 3.12+** — Modern Python with type hints
-- ✅ **No Docker Required** — Direct installation via pip
-- ✅ **No C++ Tiler** — Pure Python implementation
-- ✅ **pyproject.toml** — Standard Python packaging
-- ✅ **Unit Tests** — 120 tests with pytest
-- ✅ **GPL v3** — Open source license
+- **Browser Extension** — Collect flight data from xContest with [xcontest_data_collector](extensions/xcontest_data_collector/)
 
 ## Installation
 
@@ -110,6 +101,61 @@ pyparaglide train
 
 ```bash
 pyparaglide forecast
+```
+
+## Flight Data Collection
+
+PyParaglide uses historical flight data from xContest for training. The recommended way to collect this data is using the browser extension.
+
+### Browser Extension (Recommended)
+
+Use the [xcontest_data_collector](extensions/xcontest_data_collector/) browser extension:
+
+1. **Install the extension** (Chrome/Firefox)
+2. **Visit xcontest.org** and navigate to your region
+3. **Click extension** to download flight data as JSON
+4. **Place files** in `data/flights/` directory
+
+**See [extensions/xcontest_data_collector/README.md](extensions/xcontest_data_collector/README.md) for installation and usage details.**
+
+## Complete Pipeline
+
+The full PyParaglide workflow from data collection to forecast:
+
+```
+1. Collect Flight Data
+   └─> Use xcontest_data_collector browser extension
+   └─> Export to data/flights/
+
+2. Analyze & Determine Parameters
+   └─> pyparaglide analyze flights --bbox 45,47,13,16
+   └─> pyparaglide analyze meteo --dates 2024-06-01:2024-08-31
+   └─> Review flight distribution
+   └─> Determine optimal bbox and training date ranges
+
+3. Download Weather Data
+   └─> pyparaglide dl analysis --dates 2024-06-01:2024-08-31
+   └─> pyparaglide dl elevation --bbox 45,47,13,15
+
+4. Build Dataset
+   └─> pyparaglide build-dataset --dates 2024-06-01:2024-08-31
+   └─> Creates PKL files from GRIB + flights
+
+5. Train Model
+   └─> pyparaglide train --epochs 55
+   └─> CELLS model (grid-based, 1°×1°)
+
+6. Evaluate Quality
+   └─> pyparaglide evaluate
+   └─> Review metrics, ROC AUC, confusion matrix
+
+7. Generate Forecast
+   └─> pyparaglide dl forecast --days 10
+   └─> pyparaglide forecast
+
+8. Interpret Results
+   └─> Output files in output/forecasts/
+   └─> Each day has predictions for different hours
 ```
 
 ## CLI Commands
@@ -290,16 +336,15 @@ PyParaglide uses a custom neural network with:
 2. **Flyability Block** — Combines wind, weather, and humidity data
 3. **Crossability Block** — Predicts cross-country potential
 4. **Population Block** — Models pilot behavior and probability
-5. **Separate Indicators** — Wind-flyability and humidity-flyability
 
-### Outputs (per altitude level)
+### Outputs (2 outputs, per altitude level)
 
 | Output | Description |
 |--------|-------------|
 | `flown` | Overall flight probability |
-| `flown fufu` | Cross-country potential |
-| `flown of wind` | Wind-based flyability |
-| `flown of rain` | Humidity/rain-based flyability |
+| `crossed` | Cross-country potential |
+
+**Note:** Altitude levels are aggregated (nb_altitudes=1). The model uses a CELLS-only architecture (grid-based, 1°×1°).
 
 ## Development
 
@@ -404,7 +449,9 @@ pyparaglide download --skip-gfs
 
 ### Flight Data
 
-Historical flight data from xContest API (paragliding community platform).
+Historical flight data from xContest (paragliding community platform).
+
+**Recommended:** Use the [xcontest_data_collector](extensions/xcontest_data_collector/) browser extension to easily download flight data from xContest.
 
 ## Acknowledgments
 

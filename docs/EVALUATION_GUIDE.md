@@ -174,14 +174,14 @@ FP/TP = 292/118 = 2.47
 
 ## Выходы модели (Outputs)
 
-### CELLS модель имеет 4 выхода:
+### CELLS модель имеет 2 выхода:
 
 | Output | Описание | Для чего используется |
 |--------|----------|---------------------|
 | **flown** | Общая летальность | Принятие решения "ехать/не ехать" |
 | **crossed** | XC cross-country потенциал | Оценка перспективы дальнего перелёта |
-| **wind_flown** | Индикатор по ветру | Проверка ветровых условий |
-| **humidity_flown** | Индикатор по влажности/дождю | Проверка осадков |
+
+**Примечание:** Начиная с версии 2.1.0, модель использует только 2 выхода. Индикаторы `wind_flown` и `humidity_flown` были удалены для упрощения архитектуры.
 
 ### Как оценить разные outputs
 
@@ -191,12 +191,6 @@ pyparaglide evaluate --year 2023 --model cells --output flown --threshold 0.1
 
 # XC перспективы
 pyparaglide evaluate --year 2023 --model cells --output crossed --threshold 0.05
-
-# Индикатор по ветру
-pyparaglide evaluate --year 2023 --model cells --output wind_flown --threshold 0.1
-
-# Индикатор по влажности
-pyparaglide evaluate --year 2023 --model cells --output humidity_flown --threshold 0.1
 ```
 
 ---
@@ -209,8 +203,6 @@ pyparaglide evaluate --year 2023 --model cells --output humidity_flown --thresho
 |--------|-----------|----|----|----------------|
 | **flown** | **0.1** | 0.42 | 99% | Поймать почти все лётные дни |
 | **crossed** | **0.05** | 0.16 | 77% | XC условия редкие, нужен низкий threshold |
-| **wind_flown** | 0.1 | (экспериментально) | - | Проверка ветра |
-| **humidity_flown** | 0.1 | (экспериментально) | - | Проверка дождя |
 
 #### Когда использовать flown vs crossed:
 
