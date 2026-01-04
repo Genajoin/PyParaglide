@@ -239,8 +239,8 @@ class Forecaster:
         }
 
         if self.model_type == ModelType.CELLS:
-            # 4 outputs: flown, crossed, wind_flown, humidity_flown
-            flown, crossed, wind_flown, humidity_flown = predictions
+            # 2 outputs: flown, crossed
+            flown, crossed = predictions
 
             for cell_idx in range(self.nb_cells):
                 # Single aggregated prediction per cell (altitude binning removed)
@@ -248,8 +248,6 @@ class Forecaster:
                     "cell_id": cell_idx,
                     "flyability": float(flown[0, cell_idx, 0]),
                     "crossability": float(crossed[0, cell_idx, 0]),
-                    "wind_flyability": float(wind_flown[0, cell_idx, 0]),
-                    "humidity_flyability": float(humidity_flown[0, cell_idx, 0]),
                 }
 
                 results["predictions"].append(cell_result)

@@ -15,15 +15,13 @@ class TestModelCells:
     """Test ModelCells model creation and execution."""
 
     def test_output_names(self):
-        """Test output names list (after altitude binning removal)."""
+        """Test output names list (after removing redundant indicators)."""
         names = ModelCells.output_names()
 
-        # After altitude binning removal: 4 outputs instead of 20
-        assert len(names) == 4
+        # After removing wind_flown and humidity_flown: 2 outputs
+        assert len(names) == 2
         assert "flown" in names
         assert "crossed" in names
-        assert "wind_flown" in names
-        assert "humidity_flown" in names
 
     def test_create_model_classification(self):
         """Test creating CELLS model for CLASSIFICATION."""
@@ -53,8 +51,8 @@ class TestModelCells:
         assert "in_rain" in input_names
         assert "in_wind" in input_names
 
-        # Check number of outputs (4 outputs: flown, crossed, wind_flown, humidity_flown)
-        assert len(model.outputs) == 4
+        # Check number of outputs (2 outputs: flown, crossed)
+        assert len(model.outputs) == 2
 
     def test_create_model_regression(self):
         """Test creating CELLS model for REGRESSION."""
@@ -70,7 +68,7 @@ class TestModelCells:
 
         assert model is not None
         assert isinstance(model, tf.keras.Model)
-        assert len(model.outputs) == 4
+        assert len(model.outputs) == 2
 
     def test_model_forward_pass(self):
         """Test forward pass through the model."""
@@ -100,7 +98,7 @@ class TestModelCells:
         outputs = model(inputs)
 
         # Check outputs
-        assert len(outputs) == 4
+        assert len(outputs) == 2
 
         # Each output should have shape (batch, nb_cells, 1) after altitude binning removal
         for output in outputs:

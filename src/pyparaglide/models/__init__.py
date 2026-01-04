@@ -12,11 +12,9 @@ from pyparaglide.models.enums import ModelType, ModelSettings, ProblemFormulatio
 from pyparaglide.models.layers import (
     CrossabilityBlock,
     FlyabilityBlock,
-    HumidityFlyabilityBlock,
     PopulationBlock,
     WindBlockCells,
     WindBlockSpots,
-    WindFlyabilityBlock,
 )
 from pyparaglide.models.model_cells import ModelCells
 from pyparaglide.models.model_spots import ModelSpots
@@ -27,8 +25,6 @@ __all__ = [
     "ProblemFormulation",
     "ModelSettings",
     # Layers
-    "WindFlyabilityBlock",
-    "HumidityFlyabilityBlock",
     "FlyabilityBlock",
     "CrossabilityBlock",
     "WindBlockSpots",

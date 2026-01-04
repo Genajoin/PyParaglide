@@ -710,7 +710,7 @@ def evaluate(
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
     threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
     model_type: str = typer.Option("cells", "--model", "-m", help="Model type: 'cells' or 'spots'"),
-    output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC), 'wind_flown', 'humidity_flown' (CELLS only)"),
+    output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC)"),
 ) -> None:
     """
     Evaluate trained model performance on a specific test year.
@@ -723,8 +723,6 @@ def evaluate(
     Available outputs for CELLS:
     - flown: Basic flyability (default)
     - crossed: XC cross-country potential
-    - wind_flown: Wind-based indicator
-    - humidity_flown: Rain-based indicator
 
     Example:
         pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed
@@ -778,13 +776,11 @@ def evaluate(
     console.print(f"[green]Found {len(test_indices)} days for testing[/green]")
 
     # Map output name to index
-    # CELLS: [flown, crossed, wind_flown, humidity_flown]
+    # CELLS: [flown, crossed]
     # SPOTS: [flown]
     output_map = {
         "flown": 0,
         "crossed": 1,
-        "wind_flown": 2,
-        "humidity_flown": 3,
     }
 
     # Validate output parameter
@@ -826,7 +822,7 @@ def evaluate(
     # X is [Date, Dow, (Mountain), Other, Rain, Wind]
     X_test = [x[test_indices] for x in X_full]
 
-    # Y is list of outputs. For CELLS: [Flown, Crossed, Wind_flown, Humidity_flown]
+    # Y is list of outputs. For CELLS: [Flown, Crossed]
     # We use the selected output
     Y_test_raw = [y[test_indices] for y in Y_full]
 
