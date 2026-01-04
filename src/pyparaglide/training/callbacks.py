@@ -71,44 +71,40 @@ class TrainingLogger(tf.keras.callbacks.Callback):
         lr = float(tf.keras.backend.get_value(self.model.optimizer.learning_rate))
         str_lr = f" lr: {lr:.2e}"
 
-        if self.model_type == ModelType.CELLS:
-            # Legacy output names for shared PopulationBlock (2 outputs after removing indicators)
-            possible_losses = [
-                "population_block_loss",
-                "population_block_1_loss",
-            ]
+        # CELLS model logging
+        # Legacy output names for shared PopulationBlock (2 outputs after removing indicators)
+        possible_losses = [
+            "population_block_loss",
+            "population_block_1_loss",
+        ]
 
-            # Also check for named outputs (if distinct blocks were used or named outputs)
-            possible_losses.extend([
-                "population_block_flown_loss",
-                "population_block_crossed_loss",
-            ])
+        # Also check for named outputs (if distinct blocks were used or named outputs)
+        possible_losses.extend([
+            "population_block_flown_loss",
+            "population_block_crossed_loss",
+        ])
 
-            # Filter to keep only those present in logs
-            losses = [l for l in possible_losses if l in logs]
+        # Filter to keep only those present in logs
+        losses = [l for l in possible_losses if l in logs]
 
-            str_training = "loss: " + self._str_val(logs.get("loss", 0.0))
-            
+        str_training = "loss: " + self._str_val(logs.get("loss", 0.0))
+
+        if losses:
+             str_training += " (" + self._str_arr(np.array([logs[l] for l in losses])) + ")"
+
+        if "val_loss" in logs:
+            str_validation = (
+                "val_loss: "
+                + self._str_val(logs["val_loss"], logs.get("loss", 0.0))
+            )
             if losses:
-                 str_training += " (" + self._str_arr(np.array([logs[l] for l in losses])) + ")"
+                # Check if val counterparts exist
+                val_losses = [f"val_{l}" for l in losses if f"val_{l}" in logs]
+                if len(val_losses) == len(losses):
+                     str_validation += " (" + self._str_arr(np.array([logs[vl] for vl in val_losses]), np.array([logs[l] for l in losses])) + ")"
 
-            if "val_loss" in logs:
-                str_validation = (
-                    "val_loss: "
-                    + self._str_val(logs["val_loss"], logs.get("loss", 0.0))
-                )
-                if losses:
-                    # Check if val counterparts exist
-                    val_losses = [f"val_{l}" for l in losses if f"val_{l}" in logs]
-                    if len(val_losses) == len(losses):
-                         str_validation += " (" + self._str_arr(np.array([logs[vl] for vl in val_losses]), np.array([logs[l] for l in losses])) + ")"
-                
-                print(str_it + str_training + " " + str_validation + str_lr)
-            else:
-                print(str_it + str_training + str_lr)
-
-        else:  # SPOTS
-            str_training = "loss: " + self._str_val(logs["loss"])
+            print(str_it + str_training + " " + str_validation + str_lr)
+        else:
             print(str_it + str_training + str_lr)
 
         # Write to log file

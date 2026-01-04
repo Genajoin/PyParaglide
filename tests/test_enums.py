@@ -19,15 +19,9 @@ class TestModelType:
         assert ModelType.CELLS.value == 0
         assert ModelType.CELLS.name == "CELLS"
 
-    def test_spots_value(self):
-        """Test SPOTS enum value."""
-        assert ModelType.SPOTS.value == 1
-        assert ModelType.SPOTS.name == "SPOTS"
-
     def test_from_string(self):
         """Test creating ModelType from string."""
         assert ModelType["CELLS"] == ModelType.CELLS
-        assert ModelType["SPOTS"] == ModelType.SPOTS
 
 
 class TestProblemFormulation:

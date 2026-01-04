@@ -14,21 +14,13 @@ See [Quick Start](../README.md#quick-start) for details.
 
 ## Model Types
 
-PyParaglide supports two model types:
+PyParaglide uses the CELLS model:
 
 ### CELLS Model
 - **Grid-based** flyability prediction (1°×1° cells)
 - Trains all cells at once
 - More data per model → better generalization
 - **Use for**: Regional overview, when you need predictions for entire area
-
-### SPOTS Model
-- **Spot-specific** predictions (takeoff locations)
-- One model per cell, trained separately
-- Uses CELLS weights as initialization
-- **Use for**: Accurate predictions at specific takeoffs
-
-**Recommendation**: Train CELLS first, then SPOTS
 
 ## Training Pipeline
 
@@ -65,8 +57,6 @@ This creates PKL files in `data/pkl/`:
 - `meteo_content_by_cell_day.pkl`
 - `flights_by_cell_day.pkl`
 - `mountainess_by_cell_alt.pkl`
-- `spots.pkl`
-- `flights_by_spot.pkl`
 
 ### 3. Train CELLS Model
 
@@ -81,20 +71,7 @@ pyparaglide train --model cells --epochs 600 --early-stopping-patience 30
 pyparaglide train --model cells --epochs 2 --batch-size 8
 ```
 
-### 4. Train SPOTS Model
-
-```bash
-# Train specific cell
-pyparaglide train --model spots --cell 0 --epochs 200
-
-# Train all cells
-pyparaglide train --model spots --epochs 200
-
-# Without validation (for production)
-pyparaglide train --model spots --cell 0 --epochs 200 --no-validation
-```
-
-### 5. Evaluate Model
+### 4. Evaluate Model
 
 ```bash
 # Evaluate on test year
@@ -102,9 +79,6 @@ pyparaglide evaluate --year 2023 --model cells
 
 # With custom threshold
 pyparaglide evaluate --year 2023 --model cells --threshold 0.3
-
-# Evaluate SPOTS
-pyparaglide evaluate --year 2023 --model spots --threshold 0.4
 ```
 
 ## Validation Strategies
@@ -127,11 +101,11 @@ pyparaglide train --model cells --epochs 100
 
 #### Keras Random Split (`--validation-split 0.2`)
 ```bash
-pyparaglide train --model spots --cell 0 --epochs 200 --validation-split 0.2
+pyparaglide train --model cells --epochs 200 --validation-split 0.2
 ```
 
 **Use when:**
-- Training SPOTS with limited data
+- Training with limited data
 - Want train/val to have similar distribution
 - Don't care about temporal order
 
@@ -142,8 +116,6 @@ pyparaglide train --model spots --cell 0 --epochs 200 --validation-split 0.2
 | Model | Validation Method | Early Stopping |
 |-------|-------------------|----------------|
 | CELLS | Alternating days (default) | ✅ Recommended (patience=30) |
-| SPOTS | Keras split (0.2) | ⚠️ Use with caution |
-| SPOTS (production) | No validation (`--no-validation`) | ❌ Not recommended |
 
 ## Understanding Training Metrics
 
@@ -172,15 +144,6 @@ pyparaglide train --model cells --epochs 600 --early-stopping-patience 30
 - Validation metrics are reliable
 - Prevents overfitting
 
-**⚠️ Be Careful with SPOTS:**
-```bash
-# May stop too early due to small validation set
-pyparaglide train --model spots --cell 0 --epochs 200 --validation-split 0.2 --early-stopping-patience 50
-```
-- Limited data per cell
-- Validation may not be representative
-- Consider training without early stopping for production
-
 ## Recommended Training Configurations
 
 ### CELLS Production Training
@@ -196,35 +159,6 @@ pyparaglide train --model cells \
 # - Train loss: ~0.28
 # - Val loss: ~0.28-0.36
 # - Stops at epoch 80-120 typically
-```
-
-### SPOTS Production Training
-
-```bash
-# Without validation (for best results)
-pyparaglide train --model spots \
-  --cell 0 \
-  --epochs 200 \
-  --batch-size 32 \
-  --no-validation
-
-# Expected results:
-# - Train loss: ~0.25-0.45
-# - Best for production use
-```
-
-### SPOTS with Validation (Experimental)
-
-```bash
-# Use Keras split for more stable validation
-pyparaglide train --model spots \
-  --cell 0 \
-  --epochs 200 \
-  --validation-split 0.2 \
-  --early-stopping-patience 50
-
-# Note: May stop earlier than optimal
-# Monitor if val loss is representative
 ```
 
 ## Model Evaluation
@@ -293,7 +227,6 @@ pyparaglide evaluate --year 2023 --threshold 0.3
 | Model | Minimum | Recommended | With Early Stopping |
 |-------|---------|-------------|---------------------|
 | CELLS | 55 | 100-200 | 600 |
-| SPOTS | 55 | 100-200 | 200 |
 
 ## Troubleshooting
 
@@ -318,27 +251,10 @@ pyparaglide train --model cells --epochs 100 --batch-size 16
 - Increase training epochs
 - Check for data quality issues
 
-**For SPOTS:**
-- Try Keras validation split (`--validation-split 0.2`)
-- Consider training without validation
-- Ensure you have enough spots in the cell
-
-### SPOTS Loss Higher Than CELLS
-
-This is **normal**! SPOTS typically has:
-- Higher loss due to less data per model
-- More variance between cells
-- Different optimal thresholds
-
-**Typical values:**
-- CELLS val_loss: 0.28-0.36
-- SPOTS train_loss: 0.25-0.45
-
 ## Model Outputs
 
 Training saves:
 - `cells.weights.h5` — CELLS model weights
-- `spots_cell_N.weights.h5` — SPOTS weights for cell N
 - `normalization_*.pkl` — Normalization coefficients
 
 To `data/models/` by default (configurable via `PYPARAGLIDE_MODELS_DIR`).
@@ -370,7 +286,6 @@ pyparaglide train --model cells --super-res 2 --epochs 100
 # Complete training pipeline
 pyparaglide build-dataset                                    # Build dataset
 pyparaglide train --model cells --epochs 600 -p 30          # Train CELLS
-pyparaglide train --model spots --cell 0 --epochs 200 --no-validation  # Train SPOTS
 pyparaglide evaluate --year 2023 --model cells               # Evaluate
 ```
 

@@ -159,7 +159,6 @@ class DatasetBuilder:
         meteo_days = phase2.execute()
 
         # Phase 3: Process flights
-        spots_count = 0
         if include_flights:
             phase3 = BuildFlightsPhase(
                 flights_dir=self.flights_dir,
@@ -172,14 +171,6 @@ class DatasetBuilder:
                 cluster_distance_km=cluster_distance_km,
             )
             phase3.execute()
-            # Count spots from spots.pkl
-            import pickle
-            try:
-                with open(self.output_dir / "spots.pkl", 'rb') as f:
-                    spots = pickle.load(f)
-                    spots_count = len(spots)
-            except:
-                spots_count = 0
         else:
             print("\n=== Phase 3: Skipping flight processing (--no-flights) ===")
             # Create empty flights PKL
@@ -215,11 +206,9 @@ class DatasetBuilder:
         print()
         print("Dataset build complete!")
         print(f"  Cells: {len(cells_latlon)}")
-        print(f"  Spots: {spots_count}")
         print(f"  Days: {len(meteo_days)}")
 
         return {
             "cells": len(cells_latlon),
-            "spots": spots_count,
             "days": len(meteo_days),
         }

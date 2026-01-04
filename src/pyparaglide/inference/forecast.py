@@ -1,7 +1,7 @@
 """
 Forecaster for PyParaglide.
 
-Generates paragliding flyability forecasts using trained models and GFS weather data.
+Generates paragliding flyability forecasts using trained CELLS models and GFS weather data.
 """
 
 import datetime as dt
@@ -16,20 +16,19 @@ import tensorflow as tf
 from pyparaglide.config import get_settings
 from pyparaglide.data.normalization import Normalization
 from pyparaglide.inference.grib_reader import GribReader
-from pyparaglide.models import ModelCells, ModelSpots, ModelType, ProblemFormulation
+from pyparaglide.models import ModelCells, ProblemFormulation
 
 
 class Forecaster:
     """
     Main forecaster for paragliding flyability prediction.
 
-    Loads trained models and generates forecasts for spots or grid cells.
+    Loads trained CELLS models and generates grid-based forecasts.
     """
 
     def __init__(
         self,
         models_dir: Path | str,
-        model_type: ModelType = ModelType.CELLS,
         problem_formulation: ProblemFormulation = ProblemFormulation.CLASSIFICATION,
     ):
         """
@@ -37,11 +36,9 @@ class Forecaster:
 
         Args:
             models_dir: Directory containing trained model weights
-            model_type: CELLS or SPOTS
             problem_formulation: CLASSIFICATION or REGRESSION
         """
         self.models_dir = Path(models_dir)
-        self.model_type = model_type
         self.problem_formulation = problem_formulation
 
         # Model parameters
@@ -63,7 +60,7 @@ class Forecaster:
         Returns:
             Number of cells detected from weights
         """
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}.weights.h5"
+        weight_path = self.models_dir / "cells.weights.h5"
 
         import h5py
 
@@ -93,9 +90,9 @@ class Forecaster:
             return nb_cells_from_weights
 
     def load_model(self) -> None:
-        """Load trained model and normalization coefficients."""
+        """Load trained CELLS model and normalization coefficients."""
         # Load normalization
-        norm_path = self.models_dir / f"normalization_{self.model_type.name.lower()}.pkl"
+        norm_path = self.models_dir / "normalization_cells.pkl"
         if norm_path.exists():
             self.normalization = Normalization.load(norm_path)
         else:
@@ -104,32 +101,19 @@ class Forecaster:
         # Detect nb_cells from weights file before creating model
         self.nb_cells = self._detect_nb_cells_from_weights()
 
-        # Create and load model
-        if self.model_type == ModelType.CELLS:
-            self.model = ModelCells.create_model(
-                problem_formulation=self.problem_formulation,
-                nb_cells=self.nb_cells,
-                wind_dim=self.wind_dim,
-                other_dim=self.normalization.other_mean.shape[0],
-                humidity_dim=self.normalization.humidity_mean.shape[0],
-                nb_altitudes=self.nb_altitudes,
-                super_resolution=1,
-            )
-        else:
-            # SPOTS model requires cells data structure
-            cells_data = {i: {"spots": list(range(5))} for i in range(self.nb_cells)}
-            self.model = ModelSpots.create_model(
-                problem_formulation=self.problem_formulation,
-                cells_data=cells_data,
-                wind_dim=self.wind_dim,
-                other_dim=self.normalization.other_mean.shape[0],
-                humidity_dim=self.normalization.humidity_mean.shape[0],
-                nb_altitudes=self.nb_altitudes,
-                initialization={"date_factor": np.array([[1.275]]), "dow_factor": np.array([[1.0] * 7])},
-            )
+        # Create and load CELLS model
+        self.model = ModelCells.create_model(
+            problem_formulation=self.problem_formulation,
+            nb_cells=self.nb_cells,
+            wind_dim=self.wind_dim,
+            other_dim=self.normalization.other_mean.shape[0],
+            humidity_dim=self.normalization.humidity_mean.shape[0],
+            nb_altitudes=self.nb_altitudes,
+            super_resolution=1,
+        )
 
         # Load weights
-        weight_path = self.models_dir / f"{self.model_type.name.lower()}.weights.h5"
+        weight_path = self.models_dir / "cells.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded model from {weight_path}")
@@ -276,39 +260,26 @@ class Forecaster:
         return X_other, X_wind, X_humidity
 
     def _format_results(self, predictions: list[np.ndarray], target_date: dt.date, bbox: tuple[float, float, float, float]) -> dict[str, Any]:
-        """Format prediction results into output dictionary."""
+        """Format CELLS prediction results into output dictionary."""
         results = {
             "date": target_date.isoformat(),
             "bbox": {"lat_min": bbox[0], "lat_max": bbox[1], "lon_min": bbox[2], "lon_max": bbox[3]},
-            "model_type": self.model_type.name,
+            "model_type": "CELLS",
             "predictions": [],
         }
 
-        if self.model_type == ModelType.CELLS:
-            # 2 outputs: flown, crossed
-            flown, crossed = predictions
+        # 2 outputs: flown, crossed
+        flown, crossed = predictions
 
-            for cell_idx in range(self.nb_cells):
-                # Single aggregated prediction per cell (altitude binning removed)
-                cell_result = {
-                    "cell_id": cell_idx,
-                    "flyability": float(flown[0, cell_idx, 0]),
-                    "crossability": float(crossed[0, cell_idx, 0]),
-                }
+        for cell_idx in range(self.nb_cells):
+            # Single aggregated prediction per cell (altitude binning removed)
+            cell_result = {
+                "cell_id": cell_idx,
+                "flyability": float(flown[0, cell_idx, 0]),
+                "crossability": float(crossed[0, cell_idx, 0]),
+            }
 
-                results["predictions"].append(cell_result)
-
-        else:  # SPOTS
-            # One output per spot
-            for cell_idx, cell_predictions in enumerate(predictions):
-                for spot_idx, spot_value in enumerate(cell_predictions[0]):
-                    results["predictions"].append(
-                        {
-                            "cell_id": cell_idx,
-                            "spot_id": spot_idx,
-                            "flyability": float(spot_value),
-                        }
-                    )
+            results["predictions"].append(cell_result)
 
         return results
 

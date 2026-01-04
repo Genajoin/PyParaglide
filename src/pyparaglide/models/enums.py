@@ -8,10 +8,9 @@ import numpy as np
 
 
 class ModelType(Enum):
-    """Model type: CELLS for grid-based, SPOTS for location-specific."""
+    """Model type: CELLS for grid-based flyability prediction."""
 
     CELLS = 0
-    SPOTS = 1
 
 
 class ProblemFormulation(Enum):

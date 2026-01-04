@@ -2,16 +2,12 @@
 
 <div align="center">
 
-![PyParaglide Logo](www/imgs/logo/logo.svg" width="100")
-
 **AI-based paragliding flyability forecasting with TensorFlow 2.x**
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![TensorFlow 2.15+](https://img.shields.io/badge/tensorflow-2.15+-orange.svg)](https://www.tensorflow.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-120%20passing-green.svg)](tests/)
-
-**Live Site:** https://paraglidable.com
 
 </div>
 
@@ -45,13 +41,7 @@ PyParaglide is a modernized fork of [Paraglidable](https://github.com/Genajoin/P
 
 - Python 3.12 or higher
 - TensorFlow 2.15+ (automatically installed)
-- ~1GB free disk space for training data
-
-### Install from PyPI (Future)
-
-```bash
-pip install pyparaglide
-```
+- ~1TB free disk space for training data
 
 ### Install from Source
 
@@ -113,7 +103,7 @@ pyparaglide build-dataset --dates 2024-06-01:2024-08-31
 ### 4. Train Model
 
 ```bash
-pyparaglide train --cell 10 --epochs 55
+pyparaglide train
 ```
 
 ### 5. Generate Forecast
@@ -129,13 +119,12 @@ pyparaglide forecast
 | `pyparaglide version` | Show version information |
 | `pyparaglide config` | Show current configuration |
 | `pyparaglide info` | Show system information |
-| `pyparaglide download` | Download GFS analysis + elevation (legacy) |
 | `pyparaglide dl analysis` | Download GFS analysis data (historical) |
 | `pyparaglide dl forecast` | Download GFS forecast data (predictions) |
 | `pyparaglide dl elevation` | Download SRTM elevation data |
 | `pyparaglide build-dataset` | Build PKL dataset from GRIB + flights |
 | `pyparaglide analyze` | Analyze flights and weather data |
-| `pyparaglide train` | Train neural network model |
+| `pyparaglide train` | Train CELLS neural network model |
 | `pyparaglide forecast` | Generate flyability forecast |
 
 ### Data Download
@@ -210,20 +199,14 @@ pyparaglide download --dates 2024-06-01:2024-08-31
 ### Example: Training
 
 ```bash
-# Train SPOTS model for cell 10 with 55 epochs
-pyparaglide train -m spots --cell 10 --epochs 55 --batch-size 32
-
 # Train CELLS model (all cells at once)
-pyparaglide train -m cells --epochs 55
+pyparaglide train
 
 # Train with specific learning rate
-pyparaglide train -m spots --cell 5 --lr-init 0.01 --lr-end 0.001
-
-# Train multiple cells
-pyparaglide train -m spots --cell 0,1,2,3,4 --epochs 55
+pyparaglide train --lr-init 0.01 --lr-end 0.001
 
 # Train without validation
-pyparaglide train -m spots --cell 10 --no-validation
+pyparaglide train--no-validation
 ```
 
 ### Example: Forecast
@@ -425,7 +408,7 @@ Historical flight data from xContest API (paragliding community platform).
 
 ## Acknowledgments
 
-- **Original Paraglidable** by Antoine de Mandre — https://github.com/Genajoin/Paraglidable
+- **Original Paraglidable** by Antoine de Mandre — https://github.com/AntoineMeler/Paraglidable
 - **GFS Data** — NOAA/NCEP GFS model
 - **xContest** — Paragliding flight data
 - **CGIAR-CSI** — SRTM elevation data
@@ -433,11 +416,3 @@ Historical flight data from xContest API (paragliding community platform).
 ## License
 
 This project is licensed under GPL v3. The original Paraglidable project was also GPL v3.
-
----
-
-<div align="center">
-
-**[Original Project](https://github.com/Genajoin/Paraglidable)** • **[Issues](https://github.com/Genajoin/PyParaglide/issues)**
-
-</div>
