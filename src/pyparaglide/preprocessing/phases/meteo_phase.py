@@ -76,24 +76,46 @@ class BuildMeteoPhase:
         training_dates_str = self._date_ranges_to_string()
 
         # Check if PKL files already exist with matching config
-        if not self.force and self._check_existing_pkl():
-            saved_metadata = load_metadata(self.out_dir)
-            current_config = {"training_dates": training_dates_str} if training_dates_str else {}
+        pkl_exists = self._check_existing_pkl()
+        has_new_days = False
 
-            if check_config_match(current_config, saved_metadata):
-                print("  Found existing PKL files with matching dates, skipping")
-                print("  Use --force to rebuild")
-                # Load existing meteo_days
-                try:
-                    with open(self.out_dir / "meteo_days.pkl", 'rb') as f:
-                        self.meteo_days = pickle.load(f, encoding='latin1')
-                    return self.meteo_days
-                except Exception as e:
-                    print(f"  WARNING: Could not load existing PKL: {e}")
-                    print("  Rebuilding...")
-            else:
-                print(f"  Config mismatch: saved dates = {saved_metadata.get('training_dates')}")
-                print("  Rebuilding with new dates...")
+        if pkl_exists and not self.force:
+            # Scan for newly complete days BEFORE deciding to skip
+            print("  Checking for newly complete days...")
+            current_scan = self._scan_meteo_days_quick()
+
+            # Load existing meteo_days to compare
+            try:
+                with open(self.out_dir / "meteo_days.pkl", 'rb') as f:
+                    existing_days = set(pickle.load(f, encoding='latin1'))
+
+                # Check for new complete days
+                new_days = [d for d in current_scan if d not in existing_days]
+                if new_days:
+                    has_new_days = True
+                    print(f"  ✓ Found {len(new_days)} newly complete day(s)")
+                    for day in sorted(new_days)[:5]:
+                        print(f"    - {day}")
+                    if len(new_days) > 5:
+                        print(f"    ... and {len(new_days) - 5} more")
+                    print(f"  Processing incremental update...")
+                else:
+                    # No new days, check if we can skip
+                    saved_metadata = load_metadata(self.out_dir)
+                    current_config = {"training_dates": training_dates_str} if training_dates_str else {}
+
+                    if check_config_match(current_config, saved_metadata):
+                        print("  Found existing PKL files with matching dates")
+                        print("  No new complete days found, skipping rebuild")
+                        print("  Use --force to rebuild")
+                        self.meteo_days = list(existing_days)
+                        return self.meteo_days
+                    else:
+                        print(f"  Config mismatch: saved dates = {saved_metadata.get('training_dates')}")
+                        print("  Rebuilding with new dates...")
+            except Exception as e:
+                print(f"  WARNING: Could not load existing PKL: {e}")
+                print("  Rebuilding...")
 
         if not self.gfs_dir.exists():
             print(f"  ERROR: GFS directory not found: {self.gfs_dir}")
@@ -148,14 +170,66 @@ class BuildMeteoPhase:
                 return True
         return False
 
+    def _scan_meteo_days_quick(self) -> List[date]:
+        """
+        Quick scan of GFS directory for complete days (without verbose output).
+
+        Used for checking if new complete days are available before deciding
+        whether to rebuild the dataset.
+
+        Returns:
+            List of complete dates found in GFS directory
+        """
+        all_meteo_days = []
+
+        for month_dir in sorted(os.listdir(self.gfs_dir)):
+            month_path = self.gfs_dir / month_dir
+            if not month_path.is_dir():
+                continue
+
+            files_by_date = {}
+            for filename in os.listdir(month_path):
+                if filename.startswith('gfsanl_3_') and filename.endswith('.grb2'):
+                    parts = filename.split('_')
+                    if len(parts) >= 4:
+                        date_str = parts[2]
+                        hour_str = parts[3][:2]
+
+                        if date_str not in files_by_date:
+                            files_by_date[date_str] = set()
+                        files_by_date[date_str].add(hour_str)
+
+            for date_str, hours in sorted(files_by_date.items()):
+                if '06' in hours and '12' in hours and '18' in hours:
+                    year = int(date_str[:4])
+                    month = int(date_str[4:6])
+                    day = int(date_str[6:8])
+                    day_date = date(year, month, day)
+                    all_meteo_days.append(day_date)
+
+        return all_meteo_days
+
     def _scan_meteo_days(self) -> List[date]:
         """
         Scan GFS directory for available days with complete data.
+
+        AUTO-DISCOVERY: If meteo_days.pkl exists, this method automatically
+        detects newly complete days and adds them to the training set.
 
         CRITICAL FIX: This method now accumulates days from ALL date ranges
         instead of just the last one. The loop below iterates through ALL
         date_ranges and extends the meteo_days list with matching days.
         """
+        # Load existing meteo_days to detect newly complete days
+        existing_days = set()
+        existing_pkl_path = self.out_dir / "meteo_days.pkl"
+        if existing_pkl_path.exists() and not self.force:
+            try:
+                with open(existing_pkl_path, 'rb') as f:
+                    existing_days = set(pickle.load(f, encoding='latin1'))
+            except Exception:
+                existing_days = set()
+
         all_meteo_days = {}
 
         for month_dir in sorted(os.listdir(self.gfs_dir)):
@@ -185,6 +259,22 @@ class BuildMeteoPhase:
 
         print(f"  Found {len(all_meteo_days)} days with complete GFS data")
 
+        # Auto-detect newly complete days
+        newly_complete = []
+        for complete_day in all_meteo_days.keys():
+            if complete_day not in existing_days:
+                # Check if this day is in our training ranges
+                if not self.date_ranges or self._is_date_in_ranges(complete_day, self.date_ranges):
+                    newly_complete.append(complete_day)
+
+        if newly_complete:
+            print(f"  ✓ Auto-detected {len(newly_complete)} newly complete day(s):")
+            for day in sorted(newly_complete)[:10]:  # Show first 10
+                print(f"    - {day}")
+            if len(newly_complete) > 10:
+                print(f"    ... and {len(newly_complete) - 10} more")
+            print(f"  These will be automatically added to the dataset.")
+
         # Filter by training dates - CRITICAL: Check ALL date ranges
         if self.date_ranges:
             meteo_days = [d for d in all_meteo_days if self._is_date_in_ranges(d, self.date_ranges)]
@@ -201,6 +291,12 @@ class BuildMeteoPhase:
 
             if missing:
                 print(f"  WARNING: {len(missing)} days from TRAINING_DATES are missing!")
+                # Show first few missing dates as examples
+                for day in sorted(missing)[:5]:
+                    print(f"    - {day}")
+                if len(missing) > 5:
+                    print(f"    ... and {len(missing) - 5} more")
+                print(f"  Run 'pyparaglide download --dates START:END' to download missing data.")
         else:
             meteo_days = sorted(all_meteo_days.keys())
 
