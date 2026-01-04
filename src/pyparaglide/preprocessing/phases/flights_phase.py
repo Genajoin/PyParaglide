@@ -1,5 +1,5 @@
 """
-Phase 3: Process xContest flights and create spot PKL files.
+Phase 3: Process xContest flights and create flight PKL files.
 """
 
 from datetime import date
@@ -10,14 +10,12 @@ from pyparaglide.preprocessing.flights.flight_processor import (
     FlightIndexer,
     load_flights_from_json,
     process_flights,
-    filter_spots_by_flights,
-    create_spots_pkls,
 )
 from pyparaglide.preprocessing.flights.elevation_reader import ElevationReader
 
 
 class BuildFlightsPhase:
-    """Phase 3: Process xContest flights and create spot PKL files."""
+    """Phase 3: Process xContest flights and create flight PKL files."""
 
     def __init__(self, flights_dir: Path,
                  out_dir: Path,
@@ -35,7 +33,7 @@ class BuildFlightsPhase:
             meteo_days: List of meteo days
             bbox: Optional bbox filter
             date_ranges: Optional date range filters
-            min_flights: Minimum flights per spot
+            min_flights: Minimum flights per spot (unused, kept for compatibility)
             cluster_distance_km: Optional clustering radius
         """
         self.flights_dir = flights_dir
@@ -76,24 +74,26 @@ class BuildFlightsPhase:
         )
 
         print(f"  Processed flights: {len(result['flights'])}")
-        print(f"  Created spots: {len(result['spots'])}")
 
-        # Filter spots by minimum flights
-        print("\n  Filtering spots by minimum flights...")
-        valid_spots = filter_spots_by_flights(
-            result['flights'],
-            min_flights=self.min_flights,
-            bbox=self.bbox,
-            date_ranges=self.date_ranges
-        )
+        # Save flights_by_cell_day.pkl
+        import pickle
+        import numpy as np
 
-        if not valid_spots:
-            print("  WARNING: No valid spots found. Skipping PKL generation.")
-            return
-
-        # Create PKL files
-        print("\n  Creating spot PKL files...")
         nb_cells = len(self.cells_latlon)
         nb_days = len(self.meteo_days)
 
-        create_spots_pkls(result['flights'], valid_spots, self.out_dir, nb_cells, nb_days)
+        flights_by_cell_day = np.zeros((nb_cells * nb_days,), dtype=object)
+        for i in range(len(flights_by_cell_day)):
+            flights_by_cell_day[i] = []
+
+        # Populate flights_by_cell_day from processed results
+        for flight in result['flights']:
+            # flight is (cell_id, day_idx, flight_data)
+            cell_id, day_idx, flight_data = flight
+            linear_idx = day_idx * nb_cells + cell_id
+            flights_by_cell_day[linear_idx].append(flight_data)
+
+        with open(self.out_dir / "flights_by_cell_day.pkl", 'wb') as f:
+            pickle.dump(flights_by_cell_day, f)
+
+        print(f"  Created flights_by_cell_day.pkl")

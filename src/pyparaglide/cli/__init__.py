@@ -594,10 +594,8 @@ def download_elevation(
 
 @app.command()
 def train(
-    model_type: str = typer.Option("spots", "--model", "-m", help="Model type: 'cells' or 'spots' (default: spots)"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
     models_dir: str = typer.Option(None, "--models-dir", "-o", help="Directory to save model weights"),
-    cells: str = typer.Option(None, "--cell", "-c", help="Cell index (e.g., 3) or comma-separated list (e.g., 0,1,2) (default: all)"),
     lr_init: float = typer.Option(0.008, "--lr-init", help="Initial learning rate"),
     lr_end: float = typer.Option(7e-4, "--lr-end", help="Final learning rate"),
     epochs: int = typer.Option(55, "--epochs", "-e", help="Number of training epochs"),
@@ -605,22 +603,18 @@ def train(
     validation: bool = typer.Option(True, "--validation/--no-validation", help="Use validation set"),
     validation_split: float = typer.Option(0.0, "--validation-split", "-v", help="Validation split: 0=alternating days (default), 0.2=Keras random split (0.0-1.0)"),
     super_resolution: int = typer.Option(1, "--super-res", "-s", help="Super-resolution factor"),
-    load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights (CELLS only)"),
+    load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights"),
     early_stopping_patience: int = typer.Option(0, "--early-stopping-patience", "-p", help="Early stopping patience (0 = disabled, requires --validation)"),
 ) -> None:
     """
-    Train a PyParaglide model.
+    Train PyParaglide CELLS model for grid-based flyability prediction.
 
-    CELLS Model: Trains all cells at once for grid-based flyability prediction.
-    SPOTS Model (default): Trains one model per cell for spot-specific prediction.
-
-    SPOTS training requires CELLS weights - will auto-train if missing.
+    Trains all cells at once using the CELLS architecture.
 
     Example:
-        pyparaglide train --cell 10 --epochs 55
+        pyparaglide train --epochs 55
     """
     from pyparaglide.preprocessing.dataset_utils import ensure_dataset_exists
-    from pyparaglide.training.weight_utils import cells_weights_exist, train_cells_prerequisite
 
     settings = get_settings()
 
@@ -630,111 +624,41 @@ def train(
     if models_dir is None:
         models_dir = settings.models_dir
 
-    # Parse model type
-    try:
-        model_type_enum = ModelType[model_type.upper()]
-    except KeyError:
-        console.print(f"[red]Invalid model type: {model_type}[/red]")
-        console.print("Valid options: [cyan]cells[/cyan], [cyan]spots[/cyan]")
-        raise typer.Exit(1)
-
-    # Parse cells
-    if cells:
-        # Support: "--cell 3" (cell index 3) and "--cell 0,1,2" (specific indices)
-        cells_list = [int(c.strip()) for c in cells.split(",")]
-    else:
-        cells_list = None  # Will use all cells
-
-    # Determine number of cells
-    nb_cells_to_train = len(cells_list) if cells_list else 10  # Default to 10
-
-    console.print(f"[bold cyan]Training {model_type_enum.name} model[/bold cyan]\n")
+    console.print(f"[bold cyan]Training CELLS model[/bold cyan]\n")
 
     # Step 1: Validate dataset
-    console.print("[bold blue]Step 1/3: Validating dataset...[/bold blue]")
+    console.print("[bold blue]Step 1/2: Validating dataset...[/bold blue]")
     if not ensure_dataset_exists(
         pkl_dir=Path(data_dir),
-        model_type=model_type_enum.name,
+        model_type="CELLS",
         auto_build=True,
-        flights_dir=Path(settings.flights_dir) if model_type_enum == ModelType.SPOTS else None,
     ):
-        if model_type_enum == ModelType.SPOTS:
-            console.print("[red]SPOTS dataset incomplete. Options:[/red]")
-            console.print("  1. [cyan]Ensure flight JSON files exist in:[/cyan]")
-            console.print(f"     {settings.flights_dir}")
-            console.print("  2. [cyan]Or use the original build script:[/cyan]")
-            console.print("     python scripts/build_dataset.py --dates 2024-06-01:2024-08-31")
-            console.print("  3. [cyan]Or train CELLS model instead:[/cyan]")
-            console.print("     pyparaglide train --model cells --cell 10 --epochs 55")
-        else:
-            console.print("[red]Dataset validation failed. Please run:[/red]")
-            console.print("  [cyan]pyparaglide build-dataset --dates 2024-06-01:2024-08-31[/cyan]")
+        console.print("[red]Dataset validation failed. Please run:[/red]")
+        console.print("  [cyan]pyparaglide build-dataset --dates 2024-06-01:2024-08-31[/cyan]")
         raise typer.Exit(1)
     console.print("[green]Dataset validation passed ✓[/green]\n")
 
-    # Step 2: For SPOTS, ensure CELLS weights exist
-    if model_type_enum == ModelType.SPOTS:
-        console.print("[bold blue]Step 2/3: Checking CELLS weights prerequisite...[/bold blue]")
+    # Step 2: Train model
+    console.print("[bold blue]Step 2/2: Training model...[/bold blue]\n")
 
-        if not cells_weights_exist(Path(models_dir)):
-            console.print("[yellow]CELLS weights not found. Training CELLS first...[/yellow]")
-            train_cells_prerequisite(
-                pkl_dir=Path(data_dir),
-                models_dir=Path(models_dir),
-                cells=nb_cells_to_train,
-                epochs=epochs,
-                batch_size=batch_size,
-                lr_init=lr_init,
-                lr_end=lr_end,
-                validation=validation,
-            )
-        else:
-            console.print("[green]CELLS weights found ✓[/green]")
-        console.print()
-
-    # Step 3: Train model
-    console.print("[bold blue]Step 3/3: Training model...[/bold blue]\n")
-
-    if model_type_enum == ModelType.CELLS:
-        # CELLS: Train all cells at once
-        _train_cells(
-            data_dir=data_dir,
-            models_dir=models_dir,
-            cells_list=cells_list,
-            nb_cells_to_train=nb_cells_to_train,
-            epochs=epochs,
-            batch_size=batch_size,
-            lr_init=lr_init,
-            lr_end=lr_end,
-            validation=validation,
-            validation_split=validation_split,
-            super_resolution=super_resolution,
-            load_weights=load_weights,
-            early_stopping_patience=early_stopping_patience,
-        )
-    else:
-        # SPOTS: Train one model per cell
-        actual_cells = cells_list if cells_list is not None else list(range(10))
-        _train_spots(
-            data_dir=data_dir,
-            models_dir=models_dir,
-            cells_to_train=actual_cells,
-            epochs=epochs,
-            batch_size=batch_size,
-            lr_init=lr_init,
-            lr_end=lr_end,
-            validation=validation,
-            validation_split=validation_split,
-            super_resolution=super_resolution,
-            early_stopping_patience=early_stopping_patience,
-        )
+    _train_cells(
+        data_dir=data_dir,
+        models_dir=models_dir,
+        epochs=epochs,
+        batch_size=batch_size,
+        lr_init=lr_init,
+        lr_end=lr_end,
+        validation=validation,
+        validation_split=validation_split,
+        super_resolution=super_resolution,
+        load_weights=load_weights,
+        early_stopping_patience=early_stopping_patience,
+    )
 
 
 def _train_cells(
     data_dir: str,
     models_dir: str,
-    cells_list: list[int] | None,
-    nb_cells_to_train: int,
     epochs: int,
     batch_size: int,
     lr_init: float,
@@ -748,7 +672,6 @@ def _train_cells(
     """Train CELLS model (all cells at once)."""
     console.print(f"[dim]Data directory: {data_dir}[/dim]")
     console.print(f"[dim]Models directory: {models_dir}[/dim]")
-    console.print(f"[dim]Cells: {nb_cells_to_train}[/dim]")
     console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
     console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
 
@@ -760,14 +683,13 @@ def _train_cells(
         models_dir=models_dir,
     )
 
-    # Prepare data
+    # Prepare data (all cells)
     console.print("[yellow]Preparing data...[/yellow]")
-    X, Y = trainer.prepare_data(cells=cells_list, super_resolution=super_resolution)
+    X, Y = trainer.prepare_data(super_resolution=super_resolution)
 
-    # Create model
+    # Create model (all cells)
     console.print("[yellow]Creating model...[/yellow]")
-    actual_cells = cells_list if cells_list else list(range(trainer.nb_cells))
-    trainer.create_model(cells=actual_cells, super_resolution=super_resolution, load_weights=load_weights)
+    trainer.create_model(super_resolution=super_resolution, load_weights=load_weights)
 
     # Train
     console.print("[yellow]Training...[/yellow]\n")
@@ -798,97 +720,12 @@ def _train_cells(
         console.print(f"Final loss: [cyan]{final_loss:.4f}[/cyan]")
 
 
-def _train_spots(
-    data_dir: str,
-    models_dir: str,
-    cells_to_train: list[int],
-    epochs: int,
-    batch_size: int,
-    lr_init: float,
-    lr_end: float,
-    validation: bool,
-    validation_split: float,
-    super_resolution: int,
-    early_stopping_patience: int,
-) -> None:
-    """Train SPOTS models (one per cell)."""
-    trained_count = 0
-    skipped_count = 0
-
-    console.print(f"[dim]Data directory: {data_dir}[/dim]")
-    console.print(f"[dim]Models directory: {models_dir}[/dim]")
-    console.print(f"[dim]Training {len(cells_to_train)} SPOTS models (one per cell)[/dim]")
-    console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
-    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
-
-    for cell_idx in cells_to_train:
-        console.print(f"[bold cyan]Training cell {cell_idx}...[/bold cyan]")
-
-        try:
-            # Create trainer for this cell
-            trainer = Trainer(
-                data_dir=data_dir,
-                model_type=ModelType.SPOTS,
-                problem_formulation=ProblemFormulation.CLASSIFICATION,
-                models_dir=models_dir,
-            )
-
-            # Check if cell has spots
-            try:
-                spot_count = trainer.get_spot_count_for_cell(cell_idx)
-                console.print(f"[dim]Cell {cell_idx} has {spot_count} spots[/dim]")
-            except ValueError as e:
-                console.print(f"[yellow]Skipping cell {cell_idx}: {e}[/yellow]\n")
-                skipped_count += 1
-                continue
-
-            # Prepare data for this cell only
-            X, Y = trainer.prepare_data_for_cell(cell_idx)
-
-            # Create model for this cell
-            # NOTE: Initialization and FlyabilityBlock weights are loaded automatically in create_model()
-            trainer.create_model(cells=[cell_idx], super_resolution=super_resolution)
-
-            # Train
-            console.print("[yellow]Training...[/yellow]")
-            history = trainer.train(
-                X=X,
-                Y=Y,
-                lr_init=lr_init,
-                lr_end=lr_end,
-                nb_epochs=epochs,
-                batch_size=batch_size,
-                use_validation_set=validation,
-                validation_split=validation_split,
-                early_stopping_patience=early_stopping_patience,
-            )
-
-            # Save with cell suffix
-            weight_path = trainer.save_weights(suffix=f"_cell_{cell_idx}")
-
-            final_loss = history["loss"][-1]
-            console.print(f"[green]Cell {cell_idx} complete: {weight_path.name}[/green]")
-            console.print(f"[dim]Final loss: {final_loss:.4f}[/dim]\n")
-            trained_count += 1
-
-        except Exception as e:
-            console.print(f"[red]Error training cell {cell_idx}: {e}[/red]\n")
-            skipped_count += 1
-
-    # Summary
-    console.print("[bold green]SPOTS training complete![/bold green]")
-    console.print(f"Trained: [cyan]{trained_count}[/cyan] cells")
-    if skipped_count > 0:
-        console.print(f"Skipped: [yellow]{skipped_count}[/yellow] cells")
-
-
 @app.command()
 def evaluate(
     year: int = typer.Option(2025, "--year", "-y", help="Year to use for testing"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
     threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
-    model_type: str = typer.Option("cells", "--model", "-m", help="Model type: 'cells' or 'spots'"),
     output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC)"),
 ) -> None:
     """
@@ -918,15 +755,7 @@ def evaluate(
     if models_dir is None:
         models_dir = settings.models_dir
 
-    # Parse model type
-    try:
-        model_type_enum = ModelType[model_type.upper()]
-    except KeyError:
-        console.print(f"[red]Invalid model type: {model_type}[/red]")
-        console.print("Valid options: [cyan]cells[/cyan], [cyan]spots[/cyan]")
-        raise typer.Exit(1)
-
-    console.print(f"[bold cyan]Evaluating {model_type_enum.name} model on year {year}[/bold cyan]")
+    console.print(f"[bold cyan]Evaluating CELLS model on year {year}[/bold cyan]")
     console.print(f"[dim]Data: {data_dir}[/dim]")
     console.print(f"[dim]Models: {models_dir}[/dim]")
     console.print(f"[dim]Threshold: {threshold}[/dim]\n")
@@ -934,7 +763,7 @@ def evaluate(
     # Initialize Trainer
     trainer = Trainer(
         data_dir=data_dir,
-        model_type=model_type_enum,
+        model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
     )
@@ -956,7 +785,6 @@ def evaluate(
 
     # Map output name to index
     # CELLS: [flown, crossed]
-    # SPOTS: [flown]
     output_map = {
         "flown": 0,
         "crossed": 1,
@@ -965,15 +793,7 @@ def evaluate(
     # Validate output parameter
     if output not in output_map:
         console.print(f"[red]Invalid output: {output}[/red]")
-        if model_type_enum == ModelType.SPOTS:
-            console.print("SPOTS model only supports: 'flown'")
-        else:
-            console.print(f"Valid options: {list(output_map.keys())}")
-        raise typer.Exit(1)
-
-    # For SPOTS, only 'flown' is available
-    if model_type_enum == ModelType.SPOTS and output != "flown":
-        console.print(f"[red]SPOTS model only supports 'flown' output, not '{output}'[/red]")
+        console.print(f"Valid options: {list(output_map.keys())}")
         raise typer.Exit(1)
 
     output_idx = output_map[output]
@@ -982,17 +802,8 @@ def evaluate(
     # Prepare data
     console.print("[yellow]Preparing data (this might take a moment)...[/yellow]")
 
-    # For SPOTS, only use cells that have spots
-    if model_type_enum == ModelType.SPOTS:
-        spots_by_cell = trainer.dataset.get_spots()
-        cells_with_spots = [c for c in range(trainer.nb_cells) if c in spots_by_cell and spots_by_cell[c]]
-        if not cells_with_spots:
-            console.print("[red]Error: No cells with spots found[/red]")
-            raise typer.Exit(1)
-        console.print(f"[dim]Found {len(cells_with_spots)} cells with spots: {cells_with_spots}[/dim]")
-        cells_to_use = cells_with_spots
-    else:
-        cells_to_use = list(range(trainer.nb_cells))
+    # Use all cells for CELLS model
+    cells_to_use = list(range(trainer.nb_cells))
 
     # Prepare data for selected cells
     X_full, Y_full = trainer.prepare_data(cells=cells_to_use)
@@ -1090,14 +901,13 @@ def evaluate(
 @app.command()
 def forecast(
     date: str = typer.Option(None, "--date", "-d", help="Target date (YYYY-MM-DD, default: today)"),
-    model_type: str = typer.Option("cells", "--model", "-m", help="Model type: 'cells' or 'spots'"),
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
     grib_dir: str = typer.Option(None, "--grib-dir", "-g", help="Directory containing GRIB files"),
     output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for forecasts"),
     bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
 ) -> None:
     """
-    Generate paragliding flyability forecast.
+    Generate paragliding flyability forecast using CELLS model.
 
     Requires trained model weights and GFS GRIB files for the target date.
 
@@ -1129,15 +939,7 @@ def forecast(
             console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
             raise typer.Exit(1)
 
-    # Parse model type
-    try:
-        model_type_enum = ModelType[model_type.upper()]
-    except KeyError:
-        console.print(f"[red]Invalid model type: {model_type}[/red]")
-        console.print("Valid options: [cyan]cells[/cyan], [cyan]spots[/cyan]")
-        raise typer.Exit(1)
-
-    console.print(f"[bold cyan]Generating {model_type_enum.name} forecast[/bold cyan]")
+    console.print(f"[bold cyan]Generating CELLS forecast[/bold cyan]")
     console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
     console.print(f"[dim]Models: {models_dir}[/dim]")
     console.print(f"[dim]GRIB: {grib_dir}[/dim]\n")
@@ -1159,13 +961,13 @@ def forecast(
 
     # Create forecaster and generate prediction
     console.print("[yellow]Loading model...[/yellow]")
-    forecaster = Forecaster(models_dir, model_type_enum)
+    forecaster = Forecaster(models_dir, ProblemFormulation.CLASSIFICATION)
 
     console.print("[yellow]Running prediction...[/yellow]")
     results = forecaster.predict_day(grib_files, target_date, tuple(float(x) for x in bbox.split(",")))
 
     # Save results
-    output_path = Path(output_dir) / f"{target_date.isoformat()}_{model_type_enum.name.lower()}_forecast.json"
+    output_path = Path(output_dir) / f"{target_date.isoformat()}_cells_forecast.json"
     console.print("[yellow]Saving results...[/yellow]")
     forecaster.save_forecast(results, output_path)
 

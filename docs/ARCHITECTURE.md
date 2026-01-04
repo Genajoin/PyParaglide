@@ -46,8 +46,7 @@ src/pyparaglide/
 │   ├── __init__.py
 │   ├── enums.py             # ModelType, ProblemFormulation
 │   ├── layers.py            # Custom Keras layers
-│   ├── model_cells.py       # CELLS model (grid-based)
-│   └── model_spots.py       # SPOTS model (spot-based)
+│   └── model_cells.py       # CELLS model (grid-based)
 │
 ├── preprocessing/           # Dataset building
 │   ├── __init__.py
@@ -67,12 +66,6 @@ src/pyparaglide/
 - Predicts flyability for 1°×1° grid cells
 - Input: `(batch, nb_cells, nb_altitudes, 3, wind_dim)` + other weather data
 - Output: 4 predictions × 5 altitudes = 20 total outputs
-
-**SPOTS Model** (Spot-based):
-- Predicts flyability per take-off spot
-- Spot-specific wind direction weights
-- Input: Spot coordinates + weather data
-- Output: Per-spot flyability prediction
 
 ### Model Blocks
 

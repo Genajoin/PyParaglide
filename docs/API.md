@@ -72,27 +72,6 @@ output_names = ModelCells.output_names()
 # ['flown 1000', 'flown 900', ..., 'flown of rain 600']
 ```
 
-### ModelSpots
-
-```python
-from pyparaglide.models import ModelSpots, ProblemFormulation
-
-cells_data = {
-    0: {"spots": [0, 1, 2]},  # Cell 0 has 3 spots
-    1: {"spots": [3, 4]},     # Cell 1 has 2 spots
-}
-
-model = ModelSpots.create_model(
-    problem_formulation=ProblemFormulation.CLASSIFICATION,
-    cells_data=cells_data,
-    wind_dim=8,
-    other_dim=45,
-    humidity_dim=2,
-    nb_altitudes=5,
-    initialization={"date_factor": np.array([[1.275]]), "dow_factor": np.array([[1.0] * 7])},
-)
-```
-
 ## Training
 
 ### Trainer
@@ -281,7 +260,7 @@ from pyparaglide.models import ModelType
 
 # Use in trainer
 trainer = Trainer(
-    model_type=ModelType.CELLS,  # or SPOTS
+    model_type=ModelType.CELLS,
     ...
 )
 ```
@@ -291,7 +270,6 @@ trainer = Trainer(
 All custom layers are in `pyparaglide.models.layers`:
 
 - `WindBlockCells` — Wind terrain adjustment
-- `WindBlockSpots` — Spot-specific wind processing
 - `WindFlyabilityBlock` — Wind-based flyability
 - `HumidityFlyabilityBlock` — Rain-based flyability
 - `FlyabilityBlock` — Combined flyability

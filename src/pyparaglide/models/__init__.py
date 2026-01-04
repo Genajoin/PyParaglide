@@ -14,10 +14,8 @@ from pyparaglide.models.layers import (
     FlyabilityBlock,
     PopulationBlock,
     WindBlockCells,
-    WindBlockSpots,
 )
 from pyparaglide.models.model_cells import ModelCells
-from pyparaglide.models.model_spots import ModelSpots
 
 __all__ = [
     # Enums
@@ -27,10 +25,8 @@ __all__ = [
     # Layers
     "FlyabilityBlock",
     "CrossabilityBlock",
-    "WindBlockSpots",
     "WindBlockCells",
     "PopulationBlock",
     # Models
     "ModelCells",
-    "ModelSpots",
 ]

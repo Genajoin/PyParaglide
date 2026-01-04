@@ -12,7 +12,6 @@ from pyparaglide.models.layers import (
     FlyabilityBlock,
     PopulationBlock,
     WindBlockCells,
-    WindBlockSpots,
 )
 
 
@@ -205,37 +204,6 @@ class TestPopulationBlock:
         assert layer.popu.constraint is not None
         # Check that all weights are non-negative
         assert np.all(layer.popu.numpy() >= 0.0)
-
-
-@pytest.mark.usefixtures("reset_tf_session")
-class TestWindBlockSpots:
-    """Test WindBlockSpots layer."""
-
-    def test_build_and_call(self):
-        """Test building and calling WindBlockSpots."""
-        nb_spots = 3
-
-        layer = WindBlockSpots(nb_spots)
-        batch_size = 4
-        nb_altitudes = 1
-
-        # Create input: (batch, nb_altitudes, 3, wind_dim)
-        x = tf.constant(np.random.randn(batch_size, nb_altitudes, 3, 8), dtype=tf.float32)
-
-        # Build layer
-        layer.build(x.shape)
-
-        # Check weights
-        assert hasattr(layer, "windWeights")
-        assert layer.windWeights.shape == (nb_spots, 8)
-        assert hasattr(layer, "alt")
-        assert layer.alt.shape == (nb_spots, 1)
-
-        # Call layer
-        output = layer(x)
-
-        # Check output shape: (batch, nb_spots, 3)
-        assert output.shape == (batch_size, nb_spots, 3)
 
 
 @pytest.mark.usefixtures("reset_tf_session")

@@ -1,7 +1,7 @@
 """
 Model trainer for PyParaglide.
 
-Handles training of both CELLS and SPOTS models.
+Handles training of CELLS model for grid-based flyability prediction.
 """
 
 from pathlib import Path
@@ -13,21 +13,21 @@ import tensorflow as tf
 from pyparaglide.data import Dataset, Normalization
 from pyparaglide.data.dataset import convert_wind_matrix
 from pyparaglide.data.normalization import apply_normalization, compute_normalization_coeffs
-from pyparaglide.models import ModelCells, ModelSpots, ModelType, ProblemFormulation
+from pyparaglide.models import ModelCells, ModelType, ProblemFormulation
 from pyparaglide.training.callbacks import LearningRateScheduler, TrainingLogger
 
 
 class Trainer:
     """
-    Main training class for PyParaglide models.
+    Main training class for PyParaglide CELLS model.
 
-    Supports training both CELLS (grid-based) and SPOTS (location-specific) models.
+    Trains grid-based flyability prediction for 1°×1° cells.
     """
 
     def __init__(
         self,
         data_dir: Path | str,
-        model_type: ModelType,
+        model_type: ModelType = ModelType.CELLS,
         problem_formulation: ProblemFormulation = ProblemFormulation.CLASSIFICATION,
         models_dir: Path | str = "data/models",
     ):
@@ -36,7 +36,7 @@ class Trainer:
 
         Args:
             data_dir: Directory containing PKL files
-            model_type: CELLS or SPOTS
+            model_type: Must be ModelType.CELLS
             problem_formulation: CLASSIFICATION or REGRESSION
             models_dir: Directory to save/load model weights
         """
@@ -72,41 +72,22 @@ class Trainer:
         if cells is None:
             cells = list(range(self.nb_cells))
 
-        # Load weather data
-        # For SPOTS: meteo data is not organized by cells, use all data (nb_days, dim)
-        # For CELLS: meteo data is organized as (nb_cells * nb_days, dim)
-        if self.model_type == ModelType.SPOTS:
-            # Use range(nb_cells) to get all data, then we'll filter in _prepare_inputs
-            X_other = [self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_other[h]) for h in range(3)]
-            X_wind = [convert_wind_matrix(self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_wind[h]), self.wind_dim) for h in range(3)]
-            X_humidity = [self.dataset.get_meteo_matrix(list(range(self.nb_cells)), self.dataset.params_humidity[h]) for h in range(3)]
-        else:
-            X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
-            X_wind = [convert_wind_matrix(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h]), self.wind_dim) for h in range(3)]
-            X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
+        # Load weather data for CELLS: meteo data is organized as (nb_cells * nb_days, dim)
+        X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
+        X_wind = [convert_wind_matrix(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h]), self.wind_dim) for h in range(3)]
+        X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
 
-        # Compute or load normalization
-        # For SPOTS, we MUST use the normalization from the CELLS model
-        norm_path = self.models_dir / "normalization_cells.pkl"
-        if self.model_type == ModelType.SPOTS and norm_path.exists():
-            print(f"[INFO] Loading normalization from {norm_path}")
-            self.normalization = Normalization.load(norm_path)
-            norm_mean_other = self.normalization.other_mean
-            norm_std_other = self.normalization.other_std
-            norm_mean_hum = self.normalization.humidity_mean
-            norm_std_hum = self.normalization.humidity_std
-        else:
-            # Compute normalization (based on hour 1 = 12h)
-            print("[INFO] Computing normalization from data")
-            norm_mean_other, norm_std_other = compute_normalization_coeffs(X_other[1])
-            norm_mean_hum, norm_std_hum = compute_normalization_coeffs(X_humidity[1])
+        # Compute normalization (based on hour 1 = 12h)
+        print("[INFO] Computing normalization from data")
+        norm_mean_other, norm_std_other = compute_normalization_coeffs(X_other[1])
+        norm_mean_hum, norm_std_hum = compute_normalization_coeffs(X_humidity[1])
 
-            self.normalization = Normalization(
-                other_mean=norm_mean_other,
-                other_std=norm_std_other,
-                humidity_mean=norm_mean_hum,
-                humidity_std=norm_std_hum,
-            )
+        self.normalization = Normalization(
+            other_mean=norm_mean_other,
+            other_std=norm_std_other,
+            humidity_mean=norm_mean_hum,
+            humidity_std=norm_std_hum,
+        )
 
         # Apply normalization
         for h in range(3):
@@ -127,7 +108,7 @@ class Trainer:
         X_humidity: list[np.ndarray],
         super_resolution: int,
     ) -> list:
-        """Prepare input tensors for model."""
+        """Prepare input tensors for CELLS model."""
         nb_cells_model = len(cells)
 
         # Date (nb_days,)
@@ -136,32 +117,25 @@ class Trainer:
         # Day of week (nb_days, 7)
         X_dow = self.dataset.get_dow()
 
-        # Mountainess (nb_days, nb_cells, 1) - only used for CELLS (averaged over altitudes)
-        if self.model_type == ModelType.CELLS:
-            mountainess = self.dataset.get_mountainess(cells, self.nb_altitudes)  # Shape: (nb_cells, 1)
-            X_mountainess = np.repeat(mountainess[np.newaxis, :, :], self.nb_days, axis=0)  # (nb_days, nb_cells, 1)
+        # Mountainess (nb_days, nb_cells, 1) - averaged over altitudes
+        mountainess = self.dataset.get_mountainess(cells, self.nb_altitudes)  # Shape: (nb_cells, 1)
+        X_mountainess = np.repeat(mountainess[np.newaxis, :, :], self.nb_days, axis=0)  # (nb_days, nb_cells, 1)
 
         # Initialize stacked arrays
         dim_other = X_other[0].shape[1]
         X_other_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_other), dtype=np.float32)
-        
+
         dim_humidity = X_humidity[0].shape[1]
         X_humidity_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_humidity), dtype=np.float32)
-        
+
         X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, 1, 3, self.wind_dim), dtype=np.float32)
 
         for h in range(3):
             for i, cell in enumerate(cells):
-                # Calculate start index based on how data was loaded
                 # CELLS: data loaded for requested `cells` only -> index i
-                # SPOTS: data loaded for ALL cells (range(nb_cells)) -> index cell
-                if self.model_type == ModelType.CELLS:
-                    start_idx = i * self.nb_days
-                else:
-                    start_idx = cell * self.nb_days
-                
+                start_idx = i * self.nb_days
                 end_idx = start_idx + self.nb_days
-                
+
                 # Safety check for data availability
                 if end_idx > X_other[h].shape[0]:
                     raise ValueError(f"Not enough weather data for cell {cell}. Expected range {start_idx}:{end_idx}, but data has only {X_other[h].shape[0]} rows.")
@@ -180,39 +154,24 @@ class Trainer:
                 # Assign to stacked array
                 X_wind_stacked[:, i, 0, h, :] = wind_reshaped[:, 0, :]
 
-        # For SPOTS single-cell training: squeeze cell dimension to match model input shapes
-        if self.model_type == ModelType.SPOTS:
-            if nb_cells_model == 1:
-                X_other_stacked = X_other_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
-                X_humidity_stacked = X_humidity_stacked[:, 0, :, :]  # (nb_days, 1, 3, dim) -> (nb_days, 3, dim)
-                X_wind_stacked = X_wind_stacked[:, 0, :, :, :]  # (nb_days, 1, 1, 3, wind_dim) -> (nb_days, 1, 3, wind_dim)
-            # Note: SPOTS model doesn't use mountainess, so don't include it
-            return [X_date, X_dow, X_other_stacked, X_humidity_stacked, X_wind_stacked]
-
         return [X_date, X_dow, X_mountainess, X_other_stacked, X_humidity_stacked, X_wind_stacked]
 
     def _prepare_outputs(self, cells: list[int], super_resolution: int) -> list:
-        """Prepare output tensors for model."""
-        if self.model_type == ModelType.CELLS:
-            # Get data with shape (len(cells) * super_resolution^2 * nb_days, 1)
-            outputs = self.dataset.get_flights_by_altitude(
-                cells, self.nb_altitudes, super_resolution, self.problem_formulation == ProblemFormulation.REGRESSION
-            )
-            # Reshape each output to (nb_days, len(cells) * super_resolution^2, 1)
-            # Use F-order because output is organized as [cell0_day0, cell0_day1, ..., cell1_day0, ...]
-            return [
-                out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, 1), order='F')
-                for out in outputs
-            ]
-        else:
-            # SPOTS model
-            spots_data = self.dataset.get_flights_by_spots(cells)
-            # Stack along axis=1 gives (nb_days, n_spots)
-            return [np.stack([spots_data[c][s] for s in range(len(spots_data[c]))], axis=1, dtype=np.float32) for c in cells if len(spots_data[c]) > 0]
+        """Prepare output tensors for CELLS model."""
+        # Get data with shape (len(cells) * super_resolution^2 * nb_days, 1)
+        outputs = self.dataset.get_flights_by_altitude(
+            cells, self.nb_altitudes, super_resolution, self.problem_formulation == ProblemFormulation.REGRESSION
+        )
+        # Reshape each output to (nb_days, len(cells) * super_resolution^2, 1)
+        # Use F-order because output is organized as [cell0_day0, cell0_day1, ..., cell1_day0, ...]
+        return [
+            out.reshape((self.nb_days, len(cells) * super_resolution * super_resolution, 1), order='F')
+            for out in outputs
+        ]
 
     def create_model(
         self,
-        cells: list[int],
+        cells: list[int] | None = None,
         super_resolution: int = 1,
         load_weights: bool = False,
         weight_suffix: str = "",
@@ -221,63 +180,33 @@ class Trainer:
         Create and optionally load model weights.
 
         Args:
-            cells: List of cell indices
+            cells: List of cell indices (None = all cells)
             super_resolution: Super-resolution factor
             load_weights: Whether to load existing weights
             weight_suffix: Optional suffix for weight file
         """
         tf.keras.backend.clear_session()
 
-        if self.model_type == ModelType.CELLS:
-            self.model = ModelCells.create_model(
-                problem_formulation=self.problem_formulation,
-                nb_cells=len(cells),
-                wind_dim=self.wind_dim,
-                other_dim=45,  # Will be updated from data
-                humidity_dim=2,
-                nb_altitudes=self.nb_altitudes,
-                super_resolution=super_resolution,
-            )
-        else:
-            # SPOTS model - create cells data structure with real spots
-            # For per-cell training, use sequential indices (0, 1, ...) instead of actual cell IDs
-            spots_by_cell = self.dataset.get_spots()
-            cells_data = {}
-            for sequential_idx, cell in enumerate(cells):
-                cell_spots = spots_by_cell.get(cell, [])
-                if not cell_spots:
-                    raise ValueError(f"No spots found for cell {cell}")
-                # Use sequential index as key to match input tensor indexing
-                cells_data[sequential_idx] = {"spots": cell_spots}
+        # Use all cells if not specified
+        if cells is None:
+            cells = list(range(self.nb_cells))
 
-            # Load initialization factors from trained CELLS model
-            initialization = self._load_initialization_from_cells()
-
-            print(f"[DEBUG] Creating SPOTS model with initialization:")
-            print(f"  date_factor = {initialization['date_factor'].flatten()}")
-            print(f"  dow_factor = {initialization['dow_factor'].flatten()}")
-
-            self.model = ModelSpots.create_model(
-                problem_formulation=self.problem_formulation,
-                cells_data=cells_data,
-                wind_dim=self.wind_dim,
-                other_dim=45,
-                humidity_dim=2,
-                nb_altitudes=self.nb_altitudes,
-                initialization=initialization,
-            )
-
-            # Transfer FlyabilityBlock weights from CELLS model
-            self._transfer_flyability_weights()
+        self.model = ModelCells.create_model(
+            problem_formulation=self.problem_formulation,
+            nb_cells=len(cells),
+            wind_dim=self.wind_dim,
+            other_dim=45,  # Will be updated from data
+            humidity_dim=2,
+            nb_altitudes=self.nb_altitudes,
+            super_resolution=super_resolution,
+        )
 
         if load_weights:
             self._load_weights(suffix=weight_suffix)
 
     def _load_weights(self, suffix: str = "") -> None:
         """Load model weights from directory."""
-        # Try to load weights
-        model_name = self.model_type.name.lower()
-        weight_path = self.models_dir / f"{model_name}{suffix}.weights.h5"
+        weight_path = self.models_dir / f"cells{suffix}.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded weights from {weight_path}")
@@ -296,12 +225,11 @@ class Trainer:
 
         # Save normalization
         if self.normalization:
-            norm_path = self.models_dir / f"normalization_{self.model_type.name.lower()}{suffix}.pkl"
+            norm_path = self.models_dir / f"normalization_cells{suffix}.pkl"
             self.normalization.save(norm_path)
 
         # Save model weights
-        model_name = self.model_type.name.lower()
-        weight_path = self.models_dir / f"{model_name}{suffix}.weights.h5"
+        weight_path = self.models_dir / f"cells{suffix}.weights.h5"
         self.model.save_weights(weight_path)
         print(f"[INFO] Saved weights to {weight_path}")
         return weight_path
@@ -364,10 +292,10 @@ class Trainer:
             keras_validation_split = 0.0
 
         # Prepare callbacks
-        log_file = self.models_dir / f"{self.model_type.name.lower()}.log"
+        log_file = self.models_dir / "cells.log"
         callbacks = [
             LearningRateScheduler.create(lr_init=lr_init, lr_end=lr_end, nb_epochs=nb_epochs),
-            TrainingLogger(self.model_type, log_file),
+            TrainingLogger(ModelType.CELLS, log_file),
         ]
 
         # Add EarlyStopping if validation is enabled
@@ -434,211 +362,3 @@ class Trainer:
         if not isinstance(results, dict):
             results = {"loss": results}
         return results
-
-    def _load_initialization_from_cells(self) -> dict:
-        """
-        Load date_factor and dow_factor from trained CELLS model.
-
-        This method extracts the learned date and day-of-week factors from
-        a pre-trained CELLS model to initialize the SPOTS model with the
-        correct values instead of hardcoded defaults.
-
-        Returns:
-            Dict with 'date_factor' and 'dow_factor' arrays
-
-        Raises:
-            FileNotFoundError: If CELLS weights file is not found
-        """
-        cells_weight_path = self.models_dir / "cells.weights.h5"
-
-        if not cells_weight_path.exists():
-            print("[WARNING] CELLS weights not found, using default initialization")
-            print(f"[WARNING] Expected at: {cells_weight_path}")
-            return {
-                "date_factor": np.array([[1.275]], dtype=np.float32),
-                "dow_factor": np.array([[1.0] * 7], dtype=np.float32).T,
-            }
-
-        print(f"[INFO] Loading initialization from CELLS model: {cells_weight_path}")
-
-        # Determine nb_cells from the weights file
-        import h5py
-
-        with h5py.File(cells_weight_path, "r") as f:
-            # Find PopulationBlock layer and read its kernel shape
-            # NOTE: kernel is the largest variable (not var_0 which may be date_factor)
-            kernel_shape = None
-            for key in f["layers"].keys():
-                if "population_block" in key and "vars" in f[f"layers/{key}"]:
-                    # Find kernel variable (largest shape)
-                    vars_list = list(f[f"layers/{key}/vars"].keys())
-                    shapes = [f[f"layers/{key}/vars/{v}"].shape for v in vars_list]
-                    # kernel has shape (nb_cells, nb_altitudes), find it by max size
-                    kernel_idx = max(range(len(shapes)), key=lambda i: shapes[i][0] * shapes[i][1] if len(shapes[i]) == 2 else 0)
-                    kernel_shape = shapes[kernel_idx]
-                    break
-
-            if kernel_shape is None:
-                raise ValueError(
-                    "Could not find PopulationBlock kernel in CELLS weights file"
-                )
-
-            # kernel_shape = (nb_cells * super_resolution^2, nb_altitudes)
-            # Assuming super_resolution=1 for CELLS model
-            nb_cells_from_weights = kernel_shape[0]
-            print(
-                f"[INFO] Detected {nb_cells_from_weights} cells from CELLS weights file (kernel shape: {kernel_shape})"
-            )
-
-        # Create temporary CELLS model to load weights
-        from pyparaglide.models.enums import ModelType
-
-        temp_trainer = Trainer(
-            data_dir=self.data_dir,
-            model_type=ModelType.CELLS,
-            problem_formulation=self.problem_formulation,
-            models_dir=self.models_dir,
-        )
-
-        # Create temp model with the same nb_cells as in the weights file
-        cells_to_load = list(range(nb_cells_from_weights))
-        temp_trainer.create_model(cells=cells_to_load)
-
-        # Load weights - shapes will now match
-        temp_trainer.model.load_weights(str(cells_weight_path))
-
-        # Extract factors from PopulationBlock
-        try:
-            cells_pop = temp_trainer.model.get_layer("population_block")
-        except ValueError:
-            # Try alternative name (for multi-output models)
-            cells_pop = temp_trainer.model.get_layer("population_block_flown")
-
-        date_factor = cells_pop.var_date_factor.numpy()
-        dow_factor = cells_pop.var_dow_factor.numpy()
-
-        print(f"[INFO] Loaded initialization from CELLS model:")
-        print(f"  date_factor: {date_factor.flatten()}")
-        print(f"  dow_factor: {dow_factor.flatten()}")
-
-        # Clear the temporary model from memory
-        tf.keras.backend.clear_session()
-
-        return {
-            "date_factor": date_factor,
-            "dow_factor": dow_factor,
-        }
-
-    def _transfer_flyability_weights(self) -> None:
-        """
-        Transfer FlyabilityBlock weights from CELLS to SPOTS model.
-
-        This method loads the trained FlyabilityBlock weights from a CELLS model
-        and applies them to the SPOTS model. This provides a better starting point
-        than random initialization.
-
-        Note: This method should be called after creating the SPOTS model but before
-        training it.
-
-        Raises:
-            FileNotFoundError: If CELLS weights file is not found
-        """
-        cells_weight_path = self.models_dir / "cells.weights.h5"
-
-        if not cells_weight_path.exists():
-            print(
-                "[WARNING] CELLS weights not found, FlyabilityBlock uses random initialization"
-            )
-            print(f"[WARNING] Expected at: {cells_weight_path}")
-            return
-
-        print(
-            f"[INFO] Transferring FlyabilityBlock weights from: {cells_weight_path}"
-        )
-
-        # Reuse the code from _load_initialization_from_cells to avoid duplication
-        import h5py
-
-        with h5py.File(cells_weight_path, "r") as f:
-            # Find PopulationBlock kernel to determine nb_cells
-            # NOTE: Use kernel (largest variable), not var_0 which may be date_factor
-            kernel_shape = None
-            for key in f["layers"].keys():
-                if "population_block" in key and "vars" in f[f"layers/{key}"]:
-                    # Find kernel variable (largest shape)
-                    vars_list = list(f[f"layers/{key}/vars"].keys())
-                    shapes = [f[f"layers/{key}/vars/{v}"].shape for v in vars_list]
-                    kernel_idx = max(range(len(shapes)), key=lambda i: shapes[i][0] * shapes[i][1] if len(shapes[i]) == 2 else 0)
-                    kernel_shape = shapes[kernel_idx]
-                    break
-
-            if kernel_shape is None:
-                print("[WARNING] Could not detect nb_cells from weights file")
-                return
-
-            nb_cells_from_weights = kernel_shape[0]
-
-        # Create temporary CELLS model
-        from pyparaglide.models.enums import ModelType
-
-        temp_trainer = Trainer(
-            data_dir=self.data_dir,
-            model_type=ModelType.CELLS,
-            problem_formulation=self.problem_formulation,
-            models_dir=self.models_dir,
-        )
-
-        cells_to_load = list(range(nb_cells_from_weights))
-        temp_trainer.create_model(cells=cells_to_load)
-        temp_trainer.model.load_weights(str(cells_weight_path))
-
-        # Transfer FlyabilityBlock weights
-        try:
-            cells_flyability = temp_trainer.model.get_layer("flyability_block")
-            spots_flyability = self.model.get_layer("flyability_block")
-
-            spots_flyability.set_weights(cells_flyability.get_weights())
-            print("[INFO] Transferred FlyabilityBlock weights from CELLS")
-
-        except ValueError as e:
-            print(f"[WARNING] Could not transfer FlyabilityBlock weights: {e}")
-
-        # Clear the temporary model from memory
-        tf.keras.backend.clear_session()
-
-    def prepare_data_for_cell(self, cell_index: int) -> tuple:
-        """
-        Prepare training data for a specific cell (SPOTS model).
-
-        Args:
-            cell_index: Index of the cell to prepare data for
-
-        Returns:
-            (X, Y) tuple where X is list of inputs, Y is list of outputs
-
-        Raises:
-            ValueError: If model_type is not SPOTS
-        """
-        if self.model_type != ModelType.SPOTS:
-            raise ValueError("Per-cell data preparation only for SPOTS model")
-
-        print(f"[INFO] Preparing data for cell {cell_index}")
-        return self.prepare_data(cells=[cell_index])
-
-    def get_spot_count_for_cell(self, cell_index: int) -> int:
-        """
-        Get number of spots in a specific cell.
-
-        Args:
-            cell_index: Index of the cell
-
-        Returns:
-            Number of spots in the cell
-
-        Raises:
-            ValueError: If cell has no spots or spots data not available
-        """
-        spots_by_cell = self.dataset.get_spots()
-        if cell_index not in spots_by_cell:
-            raise ValueError(f"No spots found for cell {cell_index}")
-        return len(spots_by_cell[cell_index])
