@@ -80,7 +80,7 @@ class GFSDownloader:
         self,
         start_date: dt.date | str,
         end_date: dt.date | str,
-    ) -> dict[Literal["downloaded", "skipped", "failed", "total_mb"], int]:
+    ) -> dict[str, int | float]:
         """
         Download GFS data for a date range.
 
