@@ -9,7 +9,7 @@
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![TensorFlow 2.15+](https://img.shields.io/badge/tensorflow-2.15+-orange.svg)](https://www.tensorflow.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-43%20passing-green.svg)](tests/)
+[![Tests](https://img.shields.io/badge/tests-120%20passing-green.svg)](tests/)
 
 **Live Site:** https://paraglidable.com
 
@@ -36,7 +36,7 @@ PyParaglide is a modernized fork of [Paraglidable](https://github.com/Genajoin/P
 - ✅ **No Docker Required** — Direct installation via pip
 - ✅ **No C++ Tiler** — Pure Python implementation
 - ✅ **pyproject.toml** — Standard Python packaging
-- ✅ **Unit Tests** — 43 tests with pytest
+- ✅ **Unit Tests** — 120 tests with pytest
 - ✅ **GPL v3** — Open source license
 
 ## Installation
@@ -301,11 +301,44 @@ mypy src/
 - **[Training Guide](docs/TRAINING.md)** — How to train models
 - **[Contributing](CONTRIBUTING.md)** — Contribution guidelines
 
+## Data Sources
+
+### Weather Data (GFS)
+
+PyParaglide uses NOAA GFS (Global Forecast System) weather data:
+- **GFS Analysis** (2021+): AWS S3 (NOAA Open Data)
+- **GFS Analysis** (2000-2021): NCAR RDA (requires free registration)
+
+### Elevation Data (SRTM)
+
+PyParaglide supports global elevation data via SRTM:
+
+- **SRTM3** (90m resolution): Default, from CGIAR-CSI
+- **SRTM1** (30m resolution): From AWS S3 (untested for negative coordinates)
+
+**Coverage:** ±60° latitude (covers most inhabited regions)
+
+**Supported Regions:**
+- Alps: `PYPARAGLIDE_BBOX=45,47,6,10`
+- Patagonia: `PYPARAGLIDE_BBOX=-55,-40,-75,-65`
+- Himalayas: `PYPARAGLIDE_BBOX=27,30,85,88`
+- New Zealand: `PYPARAGLIDE_BBOX=-47,-34,166,179`
+
+Elevation data auto-downloads during `pyparaglide build-dataset` or manually via:
+```bash
+pyparaglide download --skip-gfs
+```
+
+### Flight Data
+
+Historical flight data from xContest API (paragliding community platform).
+
 ## Acknowledgments
 
 - **Original Paraglidable** by Antoine de Mandre — https://github.com/Genajoin/Paraglidable
 - **GFS Data** — NOAA/NCEP GFS model
 - **xContest** — Paragliding flight data
+- **CGIAR-CSI** — SRTM elevation data
 
 ## License
 

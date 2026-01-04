@@ -1003,20 +1003,32 @@ def download(
     hours: str = typer.Option("0,6,12,18", "--hours", "-H", help="UTC hours to download (comma-separated)"),
     workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel download workers"),
     filter: bool = typer.Option(False, "--filter", help="Filter GRIB files to reduce size by ~50%"),
+    skip_gfs: bool = typer.Option(False, "--skip-gfs", help="Skip GFS download"),
+    skip_elevation: bool = typer.Option(False, "--skip-elevation", help="Skip elevation download"),
 ) -> None:
     """
-    Download GFS Analysis data from NOAA.
+    Download GFS Analysis and Elevation data.
 
-    Downloads historical GFS Analysis GRIB files for specified date ranges.
+    Downloads historical GFS Analysis GRIB files and/or SRTM elevation data.
 
     Date sources (in order of priority):
     1. --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31" (multiple ranges)
     2. --start/--end (single range)
     3. TRAINING_DATES from .env (default)
 
+    Elevation source is configured via ELEVATION_SOURCE in .env:
+    - SRTM1: 30 arc-second resolution (~900m)
+    - SRTM3: 90 arc-second resolution (~2.7km), default
+
     Examples:
-        # Use dates from .env (TRAINING_DATES)
+        # Download both GFS and elevation data
         pyparaglide download
+
+        # Download only GFS (skip elevation)
+        pyparaglide download --skip-elevation
+
+        # Download only elevation (skip GFS)
+        pyparaglide download --skip-gfs
 
         # Single range with --dates
         pyparaglide download --dates 2024-06-01:2024-08-31
@@ -1034,75 +1046,107 @@ def download(
 
     settings = get_settings()
 
-    if data_dir is None:
-        data_dir = settings.gfs_dir
+    # ==============================================================================
+    # GFS Download
+    # ==============================================================================
+    if not skip_gfs:
+        if data_dir is None:
+            data_dir = settings.gfs_dir
 
-    # Parse hours
-    hour_list = [int(h.strip()) for h in hours.split(",")]
+        # Parse hours
+        hour_list = [int(h.strip()) for h in hours.split(",")]
 
-    console.print(f"[bold cyan]Downloading GFS Analysis data[/bold cyan]\n")
+        console.print(f"[bold cyan]Downloading GFS Analysis data[/bold cyan]\n")
 
-    # Determine date ranges (priority: --dates > --start/--end > .env TRAINING_DATES)
-    if dates:
-        # Parse --dates argument (same format as .env)
-        try:
-            date_ranges = parse_date_ranges(dates)
-        except ValueError as e:
-            console.print(f"[red]{e}[/red]")
+        # Determine date ranges (priority: --dates > --start/--end > .env TRAINING_DATES)
+        if dates:
+            # Parse --dates argument (same format as .env)
+            try:
+                date_ranges = parse_date_ranges(dates)
+            except ValueError as e:
+                console.print(f"[red]{e}[/red]")
+                raise typer.Exit(1)
+        elif start_date and end_date:
+            # Legacy --start/--end format (single range)
+            try:
+                date_ranges = parse_date_ranges(f"{start_date}:{end_date}")
+            except ValueError:
+                console.print(f"[red]Invalid date format[/red]")
+                console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+                raise typer.Exit(1)
+        elif start_date or end_date:
+            # Only one of --start/--end specified
+            console.print("[red]Error: --start and --end must be used together, or use --dates instead[/red]")
             raise typer.Exit(1)
-    elif start_date and end_date:
-        # Legacy --start/--end format (single range)
-        try:
-            date_ranges = parse_date_ranges(f"{start_date}:{end_date}")
-        except ValueError:
-            console.print(f"[red]Invalid date format[/red]")
-            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+        else:
+            # Use ranges from .env TRAINING_DATES
+            # parse_training_dates returns strings, so we need to convert back to dates
+            str_ranges = settings.parse_training_dates()
+            if not str_ranges:
+                console.print("[red]Error: No date ranges found. Specify --dates, --start/--end, or set TRAINING_DATES in .env[/red]")
+                raise typer.Exit(1)
+            date_ranges = [
+                (dt.datetime.strptime(start, "%Y-%m-%d").date(),
+                 dt.datetime.strptime(end, "%Y-%m-%d").date())
+                for start, end in str_ranges
+            ]
+
+        # Create downloader
+        from pyparaglide.downloads.gfs_downloader import GFSDownloader
+
+        downloader = GFSDownloader(
+            data_dir=data_dir,
+            hours=hour_list,
+            workers=workers,
+            filter_grib=filter,
+        )
+
+        # Download all ranges
+        total_stats = {"downloaded": 0, "skipped": 0, "failed": 0, "total_mb": 0.0}
+
+        for start, end in date_ranges:
+            console.print(f"\n[yellow]Processing range: {start} to {end}[/yellow]")
+            stats = downloader.download_range(start, end)
+
+            for key in total_stats:
+                if key != "total_mb":
+                    total_stats[key] += stats[key]
+            total_stats["total_mb"] += stats["total_mb"]
+
+        # Print summary
+        console.print(f"\n[bold]GFS Download Summary:[/bold]")
+        console.print(f"  Downloaded: {total_stats['downloaded']} files ({total_stats['total_mb']:.1f} MB)")
+        console.print(f"  Skipped: {total_stats['skipped']} files")
+        console.print(f"  Failed: {total_stats['failed']} files")
+
+        # Return exit code based on failures
+        if total_stats["failed"] > 0:
             raise typer.Exit(1)
-    elif start_date or end_date:
-        # Only one of --start/--end specified
-        console.print("[red]Error: --start and --end must be used together, or use --dates instead[/red]")
-        raise typer.Exit(1)
-    else:
-        # Use ranges from .env TRAINING_DATES
-        # parse_training_dates returns strings, so we need to convert back to dates
-        str_ranges = settings.parse_training_dates()
-        if not str_ranges:
-            console.print("[red]Error: No date ranges found. Specify --dates, --start/--end, or set TRAINING_DATES in .env[/red]")
-            raise typer.Exit(1)
-        date_ranges = [
-            (dt.datetime.strptime(start, "%Y-%m-%d").date(),
-             dt.datetime.strptime(end, "%Y-%m-%d").date())
-            for start, end in str_ranges
-        ]
 
-    # Create downloader
-    downloader = GFSDownloader(
-        data_dir=data_dir,
-        hours=hour_list,
-        workers=workers,
-        filter_grib=filter,
-    )
+    # ==============================================================================
+    # Elevation Download
+    # ==============================================================================
+    if not skip_elevation:
+        console.print(f"\n[bold cyan]Downloading Elevation data[/bold cyan]\n")
 
-    # Download all ranges
-    total_stats = {"downloaded": 0, "skipped": 0, "failed": 0, "total_mb": 0.0}
+        from pyparaglide.downloads.elevation_downloader import ElevationDownloader
 
-    for start, end in date_ranges:
-        console.print(f"\n[yellow]Processing range: {start} to {end}[/yellow]")
-        stats = downloader.download_range(start, end)
+        bbox = settings.parse_bbox()
+        downloader = ElevationDownloader(
+            data_dir=settings.elevation_dir,
+            bbox=bbox,
+            product=settings.elevation_source,  # SRTM1 (30m) or SRTM3 (90m)
+        )
 
-        for key in total_stats:
-            if key != "total_mb":
-                total_stats[key] += stats[key]
-        total_stats["total_mb"] += stats["total_mb"]
+        stats = downloader.download()
 
-    # Print summary
-    console.print(f"\n[bold]Total Summary:[/bold]")
-    console.print(f"  Downloaded: {total_stats['downloaded']} files ({total_stats['total_mb']:.1f} MB)")
-    console.print(f"  Skipped: {total_stats['skipped']} files")
-    console.print(f"  Failed: {total_stats['failed']} files")
+        console.print(f"\n[bold]Elevation Download Summary:[/bold]")
+        console.print(f"  Source: {stats['source']}")
+        console.print(f"  BBox: {stats['bbox']}")
+        console.print(f"  Output: {stats['output_size_mb']:.1f} MB")
 
-    # Return exit code based on failures
-    if total_stats["failed"] > 0:
+    if skip_gfs and skip_elevation:
+        console.print("[yellow]Warning: Both --skip-gfs and --skip-elevation specified, nothing to download[/yellow]")
         raise typer.Exit(1)
 
 
