@@ -6,6 +6,7 @@ Generates paragliding flyability forecasts using trained models and GFS weather 
 
 import datetime as dt
 import json
+import pickle
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,9 @@ class Forecaster:
         # Model and normalization (loaded later)
         self.model: tf.keras.Model | None = None
         self.normalization: Normalization | None = None
+        
+        # Mountainess data (loaded from models_dir)
+        self.mountainess_data: np.ndarray | None = None
 
     def load_model(self) -> None:
         """Load trained model and normalization coefficients."""
@@ -92,6 +96,9 @@ class Forecaster:
             print(f"[INFO] Loaded model from {weight_path}")
         else:
             raise FileNotFoundError(f"Model weights not found: {weight_path}")
+        
+        # Load mountainess data
+        self._load_mountainess_data()
 
     def predict_day(
         self,
@@ -148,9 +155,9 @@ class Forecaster:
         # This is simplified - full implementation needs proper grid extraction
         X_other, X_wind, X_humidity = self._extract_weather_data(readers, bbox)
 
-        # Mountainess (simplified - use elevation data if available)
+        # Mountainess data from elevation analysis
         nb_cells = self.nb_cells
-        X_mountainess = np.zeros((1, nb_cells, 1), dtype=np.float32)  # nb_altitudes=1
+        X_mountainess = self._get_mountainess_inputs()
 
         # Combine all inputs
         return [X_date, X_dow, X_mountainess, X_other, X_humidity, X_wind]
@@ -265,6 +272,55 @@ class Forecaster:
                     )
 
         return results
+
+    def _load_mountainess_data(self) -> None:
+        """
+        Load mountainess data from mountainess_by_cell_alt.pkl file.
+        
+        This file contains terrain mountainess values for each grid cell,
+        computed from elevation data during model training.
+        """
+        mountainess_path = self.models_dir / "mountainess_by_cell_alt.pkl"
+        
+        if mountainess_path.exists():
+            try:
+                with open(mountainess_path, "rb") as f:
+                    self.mountainess_data = pickle.load(f)
+                print(f"[INFO] Loaded mountainess data from {mountainess_path}")
+                
+                # Validate shape
+                if self.mountainess_data is not None and self.mountainess_data.shape[0] != self.nb_cells:
+                    print(f"[WARNING] Mountainess data has {self.mountainess_data.shape[0]} cells, "
+                          f"but model expects {self.nb_cells}. Using first {self.nb_cells} cells.")
+                    self.mountainess_data = self.mountainess_data[:self.nb_cells]
+                    
+            except Exception as e:
+                print(f"[WARNING] Failed to load mountainess data from {mountainess_path}: {e}")
+                print("[INFO] Using default mountainess values (zeros)")
+                self.mountainess_data = None
+        else:
+            print(f"[WARNING] Mountainess file not found: {mountainess_path}")
+            print("[INFO] Using default mountainess values (zeros)")
+            self.mountainess_data = None
+    
+    def _get_mountainess_inputs(self) -> np.ndarray:
+        """
+        Get mountainess input tensor for model prediction.
+        
+        Returns:
+            Array of shape (1, nb_cells, 1) with mountainess values
+        """
+        nb_cells = self.nb_cells
+        
+        if self.mountainess_data is not None:
+            # Use loaded mountainess data
+            # Average over 5 altitude levels (altitude binning removed)
+            cell_avg = np.mean(self.mountainess_data, axis=1)  # Shape: (nb_cells,)
+            return cell_avg.reshape(1, nb_cells, 1).astype(np.float32)
+        else:
+            # Fallback to zeros if data not available
+            print("[DEBUG] Using zero mountainess values")
+            return np.zeros((1, nb_cells, 1), dtype=np.float32)
 
     def save_forecast(self, results: dict[str, Any], output_path: Path | str) -> None:
         """
