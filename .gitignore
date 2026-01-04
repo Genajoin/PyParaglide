@@ -48,6 +48,10 @@ htmlcov/
 .dmypy.json
 dmypy.json
 
+# Pyright
+pyrightconfig.json
+.pyright_cache/
+
 # Ruff
 .ruff_cache/
 

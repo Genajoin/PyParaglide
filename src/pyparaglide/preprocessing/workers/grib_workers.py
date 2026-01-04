@@ -232,6 +232,7 @@ def assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells)
         num_cells: Number of cells
     """
     hours_collected = {}  # (day_date, hour) -> values list
+    days_seen = set()  # Track which days we've seen at least once
 
     while True:
         try:
@@ -242,10 +243,20 @@ def assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells)
         if day_date is None:  # Sentinel to stop
             break
 
+        days_seen.add(day_date)
+
         # Store hourly values (None = missing file)
         if values is None:
             hours_collected[(day_date, hour)] = [0.0] * (num_params * num_cells)
         else:
+            # Validate that values has expected length; if not, pad/truncate
+            expected_len = num_params * num_cells
+            if len(values) < expected_len:
+                # Pad with zeros if too short
+                values = list(values) + [0.0] * (expected_len - len(values))
+            elif len(values) > expected_len:
+                # Truncate if too long (shouldn't happen, but safety)
+                values = values[:expected_len]
             hours_collected[(day_date, hour)] = values
 
         # Check if we have all 3 hours for this day
@@ -261,7 +272,13 @@ def assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells)
                 for hour in [6, 12, 18]:
                     start = cell_idx * num_params
                     end = start + num_params
-                    cell_values.extend(hours_collected[(day_date, hour)][start:end])
+                    hour_data = hours_collected[(day_date, hour)]
+                    # Ensure hour_data has enough elements
+                    if len(hour_data) >= end:
+                        cell_values.extend(hour_data[start:end])
+                    else:
+                        # Pad with zeros if hour_data is too short
+                        cell_values.extend(hour_data[start:] + [0.0] * (end - len(hour_data)))
                 day_data.append(cell_values)
 
             day_results_queue.put((day_date, day_data))
@@ -269,3 +286,12 @@ def assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells)
             # Cleanup hourly data for this day (free memory)
             for h in [6, 12, 18]:
                 del hours_collected[(day_date, h)]
+
+    # Handle any incomplete days (missing hours) - create zero-filled data
+    if hours_collected:
+        import sys
+        print(f"[WARNING] Assembler: {len(hours_collected)//3} day(s) incomplete due to missing hours", file=sys.stderr)
+        for day_date in set(d for d, _ in hours_collected.keys()):
+            # Create zero-filled day data for incomplete days
+            day_data = [[0.0] * (num_params * 3) for _ in range(num_cells)]
+            day_results_queue.put((day_date, day_data))
