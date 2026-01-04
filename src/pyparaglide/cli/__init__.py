@@ -21,7 +21,7 @@ warnings.filterwarnings("ignore", message=".*ROC AUC score.*")
 from pyparaglide import __version__
 from pyparaglide.analysis import FlightAnalyzer, MeteoAnalyzer
 from pyparaglide.config import get_settings, parse_date_ranges
-from pyparaglide.downloads import GFSDownloader
+from pyparaglide.downloads import GFSDownloader, GFSForecastDownloader
 from pyparaglide.inference import Forecaster
 from pyparaglide.models.enums import ModelType, ProblemFormulation
 from pyparaglide.preprocessing import DatasetBuilder
@@ -117,6 +117,10 @@ def info() -> None:
 # Analyze subcommand
 analyze_app = typer.Typer(help="Analyze flights and weather data", add_completion=False)
 app.add_typer(analyze_app, name="analyze")
+
+# Download subcommands (short alias 'dl' to avoid conflict with flat 'download' command)
+download_app = typer.Typer(help="Download GFS weather and elevation data (subcommands)", add_completion=False)
+app.add_typer(download_app, name="dl")
 
 
 @analyze_app.command()
@@ -411,6 +415,123 @@ Missing days: {len(result.missing_days)}"""
         console.print(f"  [cyan]pyparaglide download --dates \"{','.join(range_strs)}\"[/cyan]")
     else:
         console.print(f"[green]All expected days are available![/green]")
+
+
+# =============================================================================
+# Download Subcommands
+# =============================================================================
+
+
+@download_app.command("analysis")
+def download_analysis(
+    dates: str = typer.Option(None, "--dates", "-D", help="Date ranges (format: YYYY-MM-DD:YYYY-MM-DD,...)"),
+    start_date: str = typer.Option(None, "--start", "-s", help="Start date (YYYY-MM-DD)"),
+    end_date: str = typer.Option(None, "--end", "-e", help="End date (YYYY-MM-DD)"),
+    data_dir: str = typer.Option(None, "--data-dir", "-d", help="Output directory for GRIB files"),
+    hours: str = typer.Option("0,6,12,18", "--hours", "-H", help="UTC hours to download (comma-separated)"),
+    workers: int = typer.Option(1, "--workers", "-w", help="Number of parallel download workers"),
+    filter: bool = typer.Option(False, "--filter", help="Filter GRIB files to reduce size by ~50%"),
+) -> None:
+    """
+    Download GFS Analysis data (historical weather for training).
+
+    Downloads historical GFS Analysis GRIB files from AWS S3 for neural network training.
+
+    Examples:
+        pyparaglide download analysis --dates 2024-06-01:2024-08-31
+        pyparaglide download analysis --start 2024-06-01 --end 2024-08-31
+        pyparaglide download analysis --workers 4 --filter
+    """
+    from pyparaglide.cli._download_helpers import download_analysis_impl
+
+    download_analysis_impl(
+        dates=dates,
+        start_date=start_date,
+        end_date=end_date,
+        data_dir=data_dir,
+        hours=hours,
+        workers=workers,
+        filter_grib=filter,
+    )
+
+
+@download_app.command("forecast")
+def download_forecast(
+    date: str = typer.Option(..., "--date", "-d", help="Target date (YYYY-MM-DD)"),
+    data_dir: str = typer.Option(None, "--data-dir", "-o", help="Output directory for GRIB files"),
+    hours: str = typer.Option("6,12,18", "--hours", "-H", help="Forecast hours to download (comma-separated)"),
+) -> None:
+    """
+    Download GFS Forecast data (for generating predictions).
+
+    Downloads GFS Forecast GRIB files from NOMADS for generating flyability predictions.
+    Files are saved as YYYYMMDD-HH.grib2 in the forecasts subdirectory.
+
+    Examples:
+        pyparaglide download forecast --date 2025-01-04
+        pyparaglide download forecast --date 2025-01-04 --hours 6,12,18
+    """
+    import datetime as dt
+
+    settings = get_settings()
+
+    if data_dir is None:
+        data_dir = settings.gfs_dir
+
+    # Parse target date
+    try:
+        target_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
+    except ValueError:
+        console.print(f"[red]Invalid date format: {date}[/red]")
+        console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold cyan]Downloading GFS Forecast data[/bold cyan]")
+    console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
+    console.print(f"[dim]Hours: {hours}[/dim]\n")
+
+    # Create downloader
+    downloader = GFSForecastDownloader(
+        data_dir=data_dir,
+    )
+
+    # Parse hours
+    hour_list = [int(h.strip()) for h in hours.split(",")]
+    downloader.forecast_hours = hour_list
+
+    # Download
+    stats = downloader.download_day(target_date)
+
+    # Print summary
+    console.print(f"\n[bold]Download Summary:[/bold]")
+    console.print(f"  Downloaded: {stats['downloaded']} files ({stats['total_mb']:.1f} MB)")
+    console.print(f"  Skipped: {stats['skipped']} files")
+    console.print(f"  Failed: {stats['failed']} files")
+
+    if stats["failed"] > 0:
+        raise typer.Exit(1)
+
+
+@download_app.command("elevation")
+def download_elevation(
+    data_dir: str = typer.Option(None, "--data-dir", "-o", help="Output directory for elevation files"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+) -> None:
+    """
+    Download SRTM elevation data.
+
+    Downloads SRTM elevation tiles for terrain modeling.
+
+    Examples:
+        pyparaglide download elevation
+        pyparaglide download elevation --bbox 45,47,13,15
+    """
+    from pyparaglide.cli._download_helpers import download_elevation_impl
+
+    download_elevation_impl(
+        data_dir=data_dir,
+        bbox=bbox,
+    )
 
 
 @app.command()
@@ -1009,6 +1130,11 @@ def download(
     """
     Download GFS Analysis and Elevation data.
 
+    [bold yellow]New:[/bold yellow] Use subcommands for more control:
+      - [cyan]pyparaglide dl analysis[/cyan] for GFS Analysis
+      - [cyan]pyparaglide dl forecast[/cyan] for GFS Forecast
+      - [cyan]pyparaglide dl elevation[/cyan] for elevation
+
     Downloads historical GFS Analysis GRIB files and/or SRTM elevation data.
 
     Date sources (in order of priority):
@@ -1042,108 +1168,25 @@ def download(
         # With options
         pyparaglide download --workers 4 --filter
     """
-    import datetime as dt
+    from pyparaglide.cli._download_helpers import download_analysis_impl, download_elevation_impl
 
-    settings = get_settings()
-
-    # ==============================================================================
-    # GFS Download
-    # ==============================================================================
+    # Call helpers
     if not skip_gfs:
-        if data_dir is None:
-            data_dir = settings.gfs_dir
-
-        # Parse hours
-        hour_list = [int(h.strip()) for h in hours.split(",")]
-
-        console.print(f"[bold cyan]Downloading GFS Analysis data[/bold cyan]\n")
-
-        # Determine date ranges (priority: --dates > --start/--end > .env TRAINING_DATES)
-        if dates:
-            # Parse --dates argument (same format as .env)
-            try:
-                date_ranges = parse_date_ranges(dates)
-            except ValueError as e:
-                console.print(f"[red]{e}[/red]")
-                raise typer.Exit(1)
-        elif start_date and end_date:
-            # Legacy --start/--end format (single range)
-            try:
-                date_ranges = parse_date_ranges(f"{start_date}:{end_date}")
-            except ValueError:
-                console.print(f"[red]Invalid date format[/red]")
-                console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
-                raise typer.Exit(1)
-        elif start_date or end_date:
-            # Only one of --start/--end specified
-            console.print("[red]Error: --start and --end must be used together, or use --dates instead[/red]")
-            raise typer.Exit(1)
-        else:
-            # Use ranges from .env TRAINING_DATES
-            # parse_training_dates returns strings, so we need to convert back to dates
-            str_ranges = settings.parse_training_dates()
-            if not str_ranges:
-                console.print("[red]Error: No date ranges found. Specify --dates, --start/--end, or set TRAINING_DATES in .env[/red]")
-                raise typer.Exit(1)
-            date_ranges = [
-                (dt.datetime.strptime(start, "%Y-%m-%d").date(),
-                 dt.datetime.strptime(end, "%Y-%m-%d").date())
-                for start, end in str_ranges
-            ]
-
-        # Create downloader
-        from pyparaglide.downloads.gfs_downloader import GFSDownloader
-
-        downloader = GFSDownloader(
+        download_analysis_impl(
+            dates=dates,
+            start_date=start_date,
+            end_date=end_date,
             data_dir=data_dir,
-            hours=hour_list,
+            hours=hours,
             workers=workers,
             filter_grib=filter,
         )
 
-        # Download all ranges
-        total_stats = {"downloaded": 0, "skipped": 0, "failed": 0, "total_mb": 0.0}
-
-        for start, end in date_ranges:
-            console.print(f"\n[yellow]Processing range: {start} to {end}[/yellow]")
-            stats = downloader.download_range(start, end)
-
-            for key in total_stats:
-                if key != "total_mb":
-                    total_stats[key] += stats[key]
-            total_stats["total_mb"] += stats["total_mb"]
-
-        # Print summary
-        console.print(f"\n[bold]GFS Download Summary:[/bold]")
-        console.print(f"  Downloaded: {total_stats['downloaded']} files ({total_stats['total_mb']:.1f} MB)")
-        console.print(f"  Skipped: {total_stats['skipped']} files")
-        console.print(f"  Failed: {total_stats['failed']} files")
-
-        # Return exit code based on failures
-        if total_stats["failed"] > 0:
-            raise typer.Exit(1)
-
-    # ==============================================================================
-    # Elevation Download
-    # ==============================================================================
     if not skip_elevation:
-        console.print(f"\n[bold cyan]Downloading Elevation data[/bold cyan]\n")
-
-        from pyparaglide.downloads.elevation_downloader import ElevationDownloader
-
-        bbox = settings.parse_bbox()
-        downloader = ElevationDownloader(
-            data_dir=settings.elevation_dir,
-            bbox=bbox,
-            product=settings.elevation_source,  # SRTM1 (30m) or SRTM3 (90m)
+        download_elevation_impl(
+            data_dir=data_dir,
+            bbox=None,
         )
-
-        stats = downloader.download()
-
-        console.print(f"\n[bold]Elevation Download Summary:[/bold]")
-        console.print(f"  Source: {stats['source']}")
-        console.print(f"  BBox: {stats['bbox']}")
-        console.print(f"  Output: {stats['output_size_mb']:.1f} MB")
 
     if skip_gfs and skip_elevation:
         console.print("[yellow]Warning: Both --skip-gfs and --skip-elevation specified, nothing to download[/yellow]")
