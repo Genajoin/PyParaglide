@@ -13,7 +13,7 @@ PyParaglide is an AI-based paragliding flyability forecasting system that uses n
                                                                   ▼
                                                            ┌─────────────┐
                                                            │  Forecast   │
-                                                           │  (JSON)      │
+                                                           │  (JSON)     │
                                                            └─────────────┘
 ```
 
@@ -70,60 +70,60 @@ src/pyparaglide/
 ### Model Blocks
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        ModelCells                                │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Inputs:                                                         │
-│  ├── date (batch, 1)                                            │
-│  ├── dow (batch, 7)  - day of week one-hot                     │
-│  ├── mountainess (batch, nb_cells, nb_altitudes)                │
-│  ├── other (batch, nb_cells, 3, other_dim)                      │
-│  ├── humidity (batch, nb_cells, 3, humidity_dim)                │
-│  └── wind (batch, nb_cells, nb_altitudes, 3, wind_dim)          │
-│                                                                  │
-│  ┌─────────────────┐    ┌──────────────────────────────────┐    │
-│  │  WindBlockCells │────▶│  Wind Prediction                │    │
-│  └─────────────────┘    │  (batch, nb_cells, nb_altitudes, 3)│    │
-│                         └──────────────────────────────────┘    │
-│                                       │                         │
-│                                       ▼                         │
-│  ┌─────────────────────────────────────────────────────┐       │
-│  │  _encapsulate_flyability()                           │       │
-│  │  - Reshape & tile other/humidity over altitudes    │       │
-│  │  - FlyabilityBlock Dense layers                     │       │
-│  │  - Output: (batch, nb_cells, nb_altitudes)          │       │
-│  └─────────────────────────────────────────────────────┘       │
-│                                       │                         │
-│                                       ▼                         │
-│  ┌─────────────────┐    ┌──────────────────────────────────┐    │
-│  │ FlyabilityBlock │────▶│  Flyability Prediction           │    │
-│  └─────────────────┘    │  (batch, nb_cells, nb_altitudes)  │    │
-│                         └──────────────────────────────────┘    │
-│                                       │                         │
-│                  ┌────────────────┼────────────────┐           │
-│                  ▼                ▼                ▼           │
-│  ┌──────────────┐  ┌───────────────┐  ┌─────────────────┐   │
-│  │ Crossability │  │   Wind Fly    │  │  Humidity Fly   │   │
-│  │    Block     │  │  AbilityBlock │  │  AbilityBlock   │   │
-│  └──────┬───────┘  └───────┬───────┘  └────────┬────────┘   │
+┌───────────────────────────────────────────────────────────────┐
+│                        ModelCells                             │
+├───────────────────────────────────────────────────────────────┤
+│                                                               │
+│  Inputs:                                                      │
+│  ├── date (batch, 1)                                          │
+│  ├── dow (batch, 7)  - day of week one-hot                    │
+│  ├── mountainess (batch, nb_cells, nb_altitudes)              │
+│  ├── other (batch, nb_cells, 3, other_dim)                    │
+│  ├── humidity (batch, nb_cells, 3, humidity_dim)              │
+│  └── wind (batch, nb_cells, nb_altitudes, 3, wind_dim)        │
+│                                                               │
+│  ┌─────────────────┐    ┌──────────────────────────────────┐  │
+│  │  WindBlockCells │───▶│  Wind Prediction                 │  │
+│  └─────────────────┘    │(batch, nb_cells, nb_altitudes, 3)│  │
+│                         └──────────────────────────────────┘  │
+│                                       │                       │
+│                                       ▼                       │
+│  ┌─────────────────────────────────────────────────────┐      │
+│  │  _encapsulate_flyability()                          │      │
+│  │  - Reshape & tile other/humidity over altitudes     │      │
+│  │  - FlyabilityBlock Dense layers                     │      │
+│  │  - Output: (batch, nb_cells, nb_altitudes)          │      │
+│  └─────────────────────────────────────────────────────┘      │
+│                                       │                       │
+│                                       ▼                       │
+│  ┌─────────────────┐    ┌──────────────────────────────────┐  │
+│  │ FlyabilityBlock │───▶│  Flyability Prediction           │  │
+│  └─────────────────┘    │  (batch, nb_cells, nb_altitudes) │  │
+│                         └──────────────────────────────────┘  │
+│                                   │                           │
+│                  ┌────────────────┼────────────────┐          │
+│                  ▼                ▼                ▼          │
+│  ┌──────────────┐  ┌───────────────┐  ┌─────────────────┐     │
+│  │ Crossability │  │   Wind Fly    │  │  Humidity Fly   │     │
+│  │    Block     │  │  AbilityBlock │  │  AbilityBlock   │     │
+│  └──────┬───────┘  └───────┬───────┘  └─────────┬───────┘     │
 │         │                  │                    │             │
 │         └──────────────────┼────────────────────┘             │
 │                            ▼                                  │
 │  ┌─────────────────────────────────────────────────────┐      │
 │  │  PopulationBlock (2 separate instances)             │      │
-│  │  - Expands prediction by super_resolution^2        │      │
-│  │  - Applies pilot population model                 │      │
-│  │  - Date & day-of-week factors                      │      │
+│  │  - Expands prediction by super_resolution^2         │      │
+│  │  - Applies pilot population model                   │      │
+│  │  - Date & day-of-week factors                       │      │
 │  └─────────────────────────────────────────────────────┘      │
-│                            │                                  │
+│                              │                                │
 │                  ┌───────────┴───────────┐                    │
 │                  ▼                       ▼                    │
-│  Outputs: (2 × nb_cells × super_resolution^2 × nb_altitudes) │
-│  ├── flown (overall flight probability)                  │
-│  └── crossed (cross-country potential)                   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+│  Outputs: (2 × nb_cells × super_resolution^2 × nb_altitudes)  │
+│  ├── flown (overall flight probability)                       │
+│  └── crossed (cross-country potential)                        │
+│                                                               │
+└───────────────────────────────────────────────────────────────┘
 ```
 
 ### Custom Layers
@@ -146,85 +146,85 @@ src/pyparaglide/
 └────────┬─────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
+┌─────────────────────────────────────────────────────────┐
 │  DatasetBuilder.build()                                 │
-│  - Parse flight data from JSON                           │
-│  - Download GRIB files from GFS                          │
-│  - Extract weather parameters                            │
-│  - Create cell/spot definitions                          │
+│  - Parse flight data from JSON                          │
+│  - Download GRIB files from GFS                         │
+│  - Extract weather parameters                           │
+│  - Create cell/spot definitions                         │
 │  - Build mountainess data                               │
-│  - Save to PKL files                                     │
-└────────┬───────────────────────────────────────────────┘
+│  - Save to PKL files                                    │
+└────────┬────────────────────────────────────────────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  PKL Files                                               │
+┌─────────────────────────────────────────────────────────┐
+│  PKL Files                                              │
 │  - meteo_days.pkl                                       │
 │  - sorted_cells.pkl                                     │
 │  - meteo_params.pkl                                     │
 │  - meteo_content_by_cell_day.pkl                        │
 │  - flights_by_cell_day.pkl                              │
 │  - mountainess_by_cell_alt.pkl                          │
-└────────┬───────────────────────────────────────────────┘
+└────────┬────────────────────────────────────────────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  Trainer.prepare_data()                                  │
-│  - Load PKL files                                        │
+┌─────────────────────────────────────────────────────────┐
+│  Trainer.prepare_data()                                 │
+│  - Load PKL files                                       │
 │  - Compute normalization                                │
-│  - Prepare input tensors (date, dow, weather)            │
-│  - Prepare output tensors (flights by altitude)          │
-└────────┬───────────────────────────────────────────────┘
+│  - Prepare input tensors (date, dow, weather)           │
+│  - Prepare output tensors (flights by altitude          │
+└────────┬────────────────────────────────────────────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  Model.fit()                                             │
+┌─────────────────────────────────────────────────────────┐
+│  Model.fit()                                            │
 │  - binary_crossentropy loss                             │
 │  - Adam optimizer                                       │
-│  - Learning rate schedule                                │
+│  - Learning rate schedule                               │
 │  - Validation split                                     │
-└────────┬───────────────────────────────────────────────┘
+└────────┬────────────────────────────────────────────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  Saved Weights                                           │
+┌─────────────────────────────────────────────────────────┐
+│  Saved Weights                                          │
 │  - cells.weights.h5                                     │
 │  - normalization_*.pkl                                  │
-└────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### Forecast Pipeline
 
 ```
 ┌──────────────────┐
-│  Download GFS     │
+│  Download GFS    │
 │  (NOAA AWS S3)   │
 └────────┬─────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  GribReader.open()                                       │
+┌─────────────────────────────────────────────────────────┐
+│  GribReader.open()                                      │
 │  - Read GRIB2 files                                     │
-│  - Extract parameters by name/level                      │
-│  - Get lat/lon grids                                     │
-└────────┬───────────────────────────────────────────────┘
+│  - Extract parameters by name/level                     │
+│  - Get lat/lon grids                                    │
+└────────┬────────────────────────────────────────────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  Forecaster.predict()                                    │
-│  - Load model weights                                    │
-│  - Prepare inputs                                        │
-│  - Run model prediction                                  │
-│  - Apply denormalization                                 │
-└────────┬───────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│  Forecaster.predict()                                   │
+│  - Load model weights                                   │
+│  - Prepare inputs                                       │
+│  - Run model prediction                                 │
+│  - Apply denormalization                                │
+└────────┬────────────────────────────────────────────────┘
          │
          ▼
-┌────────────────────────────────────────────────────────────┐
-│  Forecast JSON                                           │
-│  - Predictions for each cell/altitude                    │
-│  - Date/time info                                        │
+┌─────────────────────────────────────────────────────────┐
+│  Forecast JSON                                          │
+│  - Predictions for each cell/altitude                   │
+│  - Date/time info                                       │
 │  - Model metadata                                       │
-└────────────────────────────────────────────────────────────┘
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Altitude Levels

@@ -15,7 +15,7 @@
 
 ## Overview
 
-PyParaglide is a modernized fork of [Paraglidable](https://github.com/Genajoin/Paraglidable) — an AI-powered forecasting system that predicts paragliding flying conditions based on weather data.
+PyParaglide is a modernized fork of Paraglidable — an AI-powered forecasting system that predicts paragliding flying conditions based on weather data.
 
 ### Key Features
 
@@ -42,24 +42,34 @@ cd PyParaglide
 pip install -e .
 ```
 
-### Development Installation
-
-```bash
-git clone https://github.com/Genajoin/PyParaglide.git
-cd PyParaglide
-pip install -e ".[dev]"
-```
-
 ## Quick Start
 
-### 1. Configure Environment
+### 1. Flight Data Collection
+
+PyParaglide uses historical flight data from xContest for training. The recommended way to collect this data is using the browser extension [xcontest_data_collector](extensions/xcontest_data_collector/):
+
+1. **Install the extension** (Chrome/Firefox)
+2. **Visit xcontest.org** and navigate to your region
+3. **Click extension** to download flight data as JSON
+4. **Place files** in `data/flights/` directory
+
+**See [extensions/xcontest_data_collector/README.md](extensions/xcontest_data_collector/README.md)** for installation and usage details.
+
+### 2. Analyze & Determine Parameters
+
+Review flight distribution, determine optimal bbox and training date ranges
+
+```bash
+pyparaglide analyze flights
+```
+
+### 3. Configure Environment
 
 ```bash
 cp .env.example .env
-# Edit .env to set your training dates, bbox, and data directories
 ```
 
-The `.env` file uses this format for date ranges:
+Edit .env to set your training dates, bbox, and data directories. The `.env` file uses this format for date ranges:
 ```bash
 # Multiple ranges supported (comma-separated)
 PYPARAGLIDE_TRAINING_DATES=2024-06-01:2024-08-31,2025-06-01:2025-08-31
@@ -69,94 +79,39 @@ PYPARAGLIDE_TRAINING_DATES=2024-06-01:2024-08-31,2025-06-01:2025-08-31
 
 ```bash
 # Use dates from .env (TRAINING_DATES)
-pyparaglide download
-
-# Override with specific range
-pyparaglide download --dates 2024-06-01:2024-08-31
-
-# Multiple ranges
-pyparaglide download --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
-
-# Legacy format (single range)
-pyparaglide download --start 2024-06-01 --end 2024-08-31
+pyparaglide dl analysis
+pyparaglide analyze meteo
+pyparaglide dl elevation
 ```
 
 ### 3. Build Dataset
 
+Create PKL files from GRIB + flights
+
 ```bash
 # Use dates from .env
 pyparaglide build-dataset
-
-# Override with specific range
-pyparaglide build-dataset --dates 2024-06-01:2024-08-31
 ```
 
 ### 4. Train Model
 
+CELLS model (grid-based, 1°×1°)
+
 ```bash
 pyparaglide train
+pyparaglide evaluate --year 2025 --threshold 0.1
 ```
 
 ### 5. Generate Forecast
 
 ```bash
+pyparaglide dl forecast --days 10
 pyparaglide forecast
 ```
 
-## Flight Data Collection
+### 8. Interpret Results
 
-PyParaglide uses historical flight data from xContest for training. The recommended way to collect this data is using the browser extension.
-
-### Browser Extension (Recommended)
-
-Use the [xcontest_data_collector](extensions/xcontest_data_collector/) browser extension:
-
-1. **Install the extension** (Chrome/Firefox)
-2. **Visit xcontest.org** and navigate to your region
-3. **Click extension** to download flight data as JSON
-4. **Place files** in `data/flights/` directory
-
-**See [extensions/xcontest_data_collector/README.md](extensions/xcontest_data_collector/README.md) for installation and usage details.**
-
-## Complete Pipeline
-
-The full PyParaglide workflow from data collection to forecast:
-
-```
-1. Collect Flight Data
-   └─> Use xcontest_data_collector browser extension
-   └─> Export to data/flights/
-
-2. Analyze & Determine Parameters
-   └─> pyparaglide analyze flights --bbox 45,47,13,16
-   └─> pyparaglide analyze meteo --dates 2024-06-01:2024-08-31
-   └─> Review flight distribution
-   └─> Determine optimal bbox and training date ranges
-
-3. Download Weather Data
-   └─> pyparaglide dl analysis --dates 2024-06-01:2024-08-31
-   └─> pyparaglide dl elevation --bbox 45,47,13,15
-
-4. Build Dataset
-   └─> pyparaglide build-dataset --dates 2024-06-01:2024-08-31
-   └─> Creates PKL files from GRIB + flights
-
-5. Train Model
-   └─> pyparaglide train --epochs 55
-   └─> CELLS model (grid-based, 1°×1°)
-
-6. Evaluate Quality
-   └─> pyparaglide evaluate
-   └─> Review metrics, ROC AUC, confusion matrix
-
-7. Generate Forecast
-   └─> pyparaglide dl forecast --days 10
-   └─> pyparaglide forecast
-
-8. Interpret Results
-   └─> Output files in output/forecasts/
-   └─> Each day has predictions for different hours
-```
+Output files in `output/forecasts/`. Each day has predictions for different hours.
 
 ## CLI Commands
 
@@ -189,17 +144,13 @@ pyparaglide dl analysis --dates 2024-06-01:2024-08-31
 # Multiple ranges
 pyparaglide dl analysis --dates "2024-06-01:2024-08-31,2025-06-01:2025-08-31"
 
-# Legacy format (single range)
-pyparaglide dl analysis --start 2024-06-01 --end 2024-08-31
-
 # With parallel downloads and filtering
 pyparaglide dl analysis --dates 2024-06-01:2024-08-31 --workers 4 --filter
 ```
 
 **Date Format Priority:**
 1. `--dates` (new unified format, supports multiple ranges)
-2. `--start/--end` (legacy format, single range)
-3. `.env` TRAINING_DATES (default)
+2. `.env` TRAINING_DATES (default)
 
 #### GFS Forecast Data (Predictions)
 
@@ -235,13 +186,6 @@ pyparaglide dl elevation
 pyparaglide dl elevation --bbox 45,47,13,15
 ```
 
-#### Legacy Command (Backward Compatible)
-
-```bash
-# Legacy flat command (downloads analysis + elevation)
-pyparaglide download --dates 2024-06-01:2024-08-31
-```
-
 ### Example: Training
 
 ```bash
@@ -252,7 +196,7 @@ pyparaglide train
 pyparaglide train --lr-init 0.01 --lr-end 0.001
 
 # Train without validation
-pyparaglide train--no-validation
+pyparaglide train --no-validation
 ```
 
 ### Example: Forecast
@@ -346,40 +290,6 @@ PyParaglide uses a custom neural network with:
 
 **Note:** Altitude levels are aggregated (nb_altitudes=1). The model uses a CELLS-only architecture (grid-based, 1°×1°).
 
-## Development
-
-### Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-### Code Formatting
-
-```bash
-ruff check src/
-ruff format src/
-black src/
-```
-
-### Type Checking
-
-```bash
-mypy src/
-```
-
-## Migration from Original Paraglidable
-
-| Original | PyParaglide |
-|----------|-------------|
-| TensorFlow 1.15 | TensorFlow 2.15+ |
-| Python 3.6 | Python 3.12+ |
-| Docker required | pip install |
-| C++ tiler | Pure Python |
-| Custom training scripts | Unified CLI |
-| `scripts/train.py` | `pyparaglide train` |
-| `neural_network/forecast.py` | `pyparaglide forecast` |
-
 ## Documentation
 
 - **[Architecture](docs/ARCHITECTURE.md)** — Detailed model architecture
@@ -432,7 +342,6 @@ pyparaglide dl forecast --days 10
 PyParaglide supports global elevation data via SRTM:
 
 - **SRTM3** (90m resolution): Default, from CGIAR-CSI
-- **SRTM1** (30m resolution): From AWS S3 (untested for negative coordinates)
 
 **Coverage:** ±60° latitude (covers most inhabited regions)
 
@@ -442,20 +351,12 @@ PyParaglide supports global elevation data via SRTM:
 - Himalayas: `PYPARAGLIDE_BBOX=27,30,85,88`
 - New Zealand: `PYPARAGLIDE_BBOX=-47,-34,166,179`
 
-Elevation data auto-downloads during `pyparaglide build-dataset` or manually via:
-```bash
-pyparaglide download --skip-gfs
-```
+Elevation data downloads during `pyparaglide dl eleavation`.
 
-### Flight Data
-
-Historical flight data from xContest (paragliding community platform).
-
-**Recommended:** Use the [xcontest_data_collector](extensions/xcontest_data_collector/) browser extension to easily download flight data from xContest.
 
 ## Acknowledgments
 
-- **Original Paraglidable** by Antoine de Mandre — https://github.com/AntoineMeler/Paraglidable
+- **Original [Paraglidable](https://github.com/AntoineMeler/Paraglidable)** by Antoine de Mandre
 - **GFS Data** — NOAA/NCEP GFS model
 - **xContest** — Paragliding flight data
 - **CGIAR-CSI** — SRTM elevation data

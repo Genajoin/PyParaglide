@@ -234,7 +234,7 @@ pyparaglide evaluate --year 2023 --threshold 0.3
 
 Reduce batch size:
 ```bash
-pyparaglide train --model cells --epochs 100 --batch-size 16
+pyparaglide train --epochs 100 --batch-size 16
 ```
 
 ### Poor Convergence
@@ -264,29 +264,29 @@ To `data/models/` by default (configurable via `PYPARAGLIDE_MODELS_DIR`).
 ### Custom Learning Rates
 
 ```bash
-pyparaglide train --model cells --lr-init 0.01 --lr-end 0.001 --epochs 100
+pyparaglide train --lr-init 0.01 --lr-end 0.001 --epochs 100
 ```
 
 ### Resume Training
 
 ```bash
-pyparaglide train --model cells --load-weights --epochs 100
+pyparaglide train --load-weights --epochs 100
 ```
 
 ### Super-Resolution
 
 For higher spatial resolution (experimental):
 ```bash
-pyparaglide train --model cells --super-res 2 --epochs 100
+pyparaglide train --super-res 2 --epochs 100
 ```
 
 ## Quick Reference
 
 ```bash
 # Complete training pipeline
-pyparaglide build-dataset                                    # Build dataset
-pyparaglide train --model cells --epochs 600 -p 30          # Train CELLS
-pyparaglide evaluate --year 2023 --model cells               # Evaluate
+pyparaglide build-dataset                     # Build dataset
+pyparaglide train --epochs 600 -p 30          # Train CELLS
+pyparaglide evaluate --year 2023              # Evaluate
 ```
 
 ## See Also
