@@ -89,9 +89,10 @@ class FlightAnalyzer:
         """Extract coordinates from xContest takeoff.link URL."""
         match = re.search(r"filter\[point\]=([0-9.-]+)\s+([0-9.-]+)", link)
         if match:
-            # xContest format: filter[point]=lat lon
-            # group(1) is lat, group(2) is lon
-            return float(match.group(1)), float(match.group(2))
+            # xContest format: filter[point]=lon lat
+            # group(1) is lon, group(2) is lat
+            # We swap to return (lat, lon) for consistency
+            return float(match.group(2)), float(match.group(1))
         return None, None
 
     def parse_datetime(self, dt_str: str) -> datetime | None:
