@@ -500,7 +500,7 @@ def create_spots_pkls(flights: List[Dict],
                       nb_cells: int,
                       nb_days: int) -> Tuple[List, Dict]:
     """
-    Create all SPOTS-related PKL files.
+    Create all takeoff spot-related PKL files.
 
     Creates:
     - spots.pkl: [('name', lat, lon), ...]
@@ -563,7 +563,7 @@ def create_spots_pkls(flights: List[Dict],
                 f['datetime'],
                 (
                     float(f.get('score', 0.0) or 0.0),
-                    None,  # alt - always None for SPOTS
+                    None,  # alt - always None for takeoff spot records
                     float(f.get('takeoff_alt', 0.0) or 0.0),
                     float(f['lat']),
                     float(f['lon'])

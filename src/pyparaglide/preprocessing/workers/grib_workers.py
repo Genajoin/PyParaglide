@@ -175,7 +175,7 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir
         try:
             # Parse with pygrib (CPU intensive, Parallel)
             grb_reader = InMemoryGribReader(temp_path)
-            values = grb_reader.getValues(grib_params, cells_latlon)
+            values = grb_reader.get_values(grib_params, cells_latlon)
 
             # Validate data length
             expected_len = len(grib_params) * len(cells_latlon)

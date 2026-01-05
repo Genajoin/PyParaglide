@@ -1,1 +1,0 @@
-"""Paraglidable CLI commands."""

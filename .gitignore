@@ -66,12 +66,6 @@ data/pkl/
 data/elevation/
 output/
 
-# Legacy data paths
-neural_network/bin/data/
-neural_network/bin/data_test/
-neural_network/bin/models/CLASSIFICATION_2.0.0/
-neural_network/tmp_*
-
 # Dataset metadata
 dataset_config.json
 
@@ -92,22 +86,6 @@ dataset_config.json
 *~
 .DS_Store
 
-# ============================================================================
-# Legacy/Archive (to be removed)
-# ============================================================================
-# Old web/docker/tiler paths (archived but keep in gitignore)
-www/data/
-tiler/_cache/
-tiler/Tiler/.qmake.stash
-tiler/Tiler/Makefile
-tiler/Tiler/Tiler
-*.o
-*.elev
-
-# Old script paths
-scripts/xc_score/tracks/
-scripts/neural_network
-scripts/data
 
 # ============================================================================
 # Project-specific
@@ -123,7 +101,5 @@ training_run.log
 tmp/
 temp/
 archive/*
-neural_network/bin/models/*
-scripts/legacy/*
 data/igc/*
-.*
+/.*/
