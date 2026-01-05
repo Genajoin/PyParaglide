@@ -340,6 +340,9 @@ class BuildMeteoPhase:
         # Setup cache
         cache_dir = None
         cache = None
+        cached_days = []
+        missing_days = []
+
         if self.use_cache:
             cache_dir = self.out_dir / "cache" / "grib"
             if self.rebuild_cache:
@@ -348,31 +351,46 @@ class BuildMeteoPhase:
                 cache = GribCache(cache_dir)
                 count = cache.clear_all()
                 print(f"  Removed {count} cached files")
+                missing_days = self.meteo_days[:]  # All days need processing
             else:
                 from pyparaglide.preprocessing.cache import GribCache
                 cache = GribCache(cache_dir)
                 print(f"  Using GRIB cache at {cache_dir}")
 
-                # Fast path: check if ALL files are cached
-                all_cached = True
-                missing_files = []
+                # Incremental cache: separate cached vs missing days
                 config = {'bbox': None, 'nb_cells': len(self.cells_latlon)}
 
                 for day_date in self.meteo_days:
+                    day_cached = True
                     for hour in [6, 12, 18]:
                         grb_path = self.gfs_dir / day_date.strftime('%Y-%m') / f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
                         if not cache.is_valid(grb_path, config):
-                            all_cached = False
-                            missing_files.append(f"{day_date} {hour}:00")
+                            day_cached = False
                             break
-                    if not all_cached:
-                        break
 
-                if all_cached:
-                    # Load all from cache - FAST PATH!
-                    print(f"  Loading {len(self.meteo_days)} days from GRIB cache...")
-                    self._load_from_cache(cache)
+                    if day_cached:
+                        cached_days.append(day_date)
+                    else:
+                        missing_days.append(day_date)
+
+                # If all days cached, load everything and return (ultra-fast path)
+                if not missing_days:
+                    print(f"  Loading {len(cached_days)} days from GRIB cache...")
+                    meteo_content = self._load_from_cache(cache, cached_days)
+                    print(f"  Loaded from cache: matrix shape {meteo_content.shape}")
+                    self._save_pkl("meteo_content_by_cell_day", meteo_content)
                     return
+
+                # If some days cached, report and process only missing
+                if cached_days:
+                    print(f"  Cache hit: {len(cached_days)}/{len(self.meteo_days)} days cached")
+                    print(f"  Processing {len(missing_days)} missing days...")
+                else:
+                    print(f"  No cached files found, processing all {len(missing_days)} days...")
+
+        # If no cache, process all days
+        if not self.use_cache:
+            missing_days = self.meteo_days[:]
 
         # Build GRIB params (65 without hour dimension)
         grib_params = []
@@ -389,8 +407,8 @@ class BuildMeteoPhase:
             print(f"  ERROR: Expected 65 parameters, got {len(grib_params)}")
             return
 
-        # Multiprocessing setup
-        total_days = len(self.meteo_days)
+        # Multiprocessing setup - process only missing_days
+        total_days = len(missing_days)
         total_files = total_days * 3
         num_cells = len(self.cells_latlon)
 
@@ -405,8 +423,8 @@ class BuildMeteoPhase:
 
         stop_event = threading.Event()
 
-        # Fill file queue - CRITICAL: ALL meteo_days are processed here
-        for day_date in self.meteo_days:
+        # Fill file queue - CRITICAL: Only missing_days are processed
+        for day_date in missing_days:
             for hour in [6, 12, 18]:
                 file_queue.put((day_date, hour))
 
@@ -507,28 +525,60 @@ class BuildMeteoPhase:
         hourly_queue.put((None, None, None))
         assembler.join()
 
-        # Save results - CRITICAL: All accumulated data saved in ONE file
+        # Combine cached data with newly processed data
         meteo_content = np.array(all_data, dtype=np.float32)
-        print(f"  Matrix shape: {meteo_content.shape}")
 
+        if cached_days and cache is not None:
+            print(f"  Loading {len(cached_days)} cached days...")
+            cached_data = self._load_from_cache(cache, cached_days)
+            # Merge cached and new data, preserving order of self.meteo_days
+            all_combined = []
+            cached_data_idx = 0
+            nb_cells = len(self.cells_latlon)
+
+            for day_date in self.meteo_days:
+                if day_date in cached_days:
+                    # Add from cached_data
+                    start_idx = cached_data_idx * nb_cells
+                    end_idx = start_idx + nb_cells
+                    all_combined.extend(cached_data[start_idx:end_idx])
+                    cached_data_idx += 1
+                else:
+                    # Add from newly processed data
+                    if day_date in missing_days:
+                        start_idx = missing_days.index(day_date) * nb_cells
+                        end_idx = start_idx + nb_cells
+                        all_combined.extend(meteo_content[start_idx:end_idx])
+
+            meteo_content = np.array(all_combined, dtype=np.float32)
+            print(f"  Combined matrix shape: {meteo_content.shape}")
+
+        print(f"  Matrix shape: {meteo_content.shape}")
         self._save_pkl("meteo_content_by_cell_day", meteo_content)
 
-    def _load_from_cache(self, cache) -> None:
+    def _load_from_cache(self, cache, days_to_load=None) -> np.ndarray:
         """
-        Load all meteo data from cache (fast path).
+        Load meteo data from cache for specified days.
 
         Produces matrix of shape (nb_days * nb_cells, 195) where each row is
         [hour6_params(65), hour12_params(65), hour18_params(65)] for a single day-cell.
 
         Args:
             cache: GribCache instance
+            days_to_load: List of dates to load (default: all self.meteo_days)
+
+        Returns:
+            numpy array of shape (nb_days * nb_cells, 195)
         """
         import numpy as np
+
+        if days_to_load is None:
+            days_to_load = self.meteo_days
 
         nb_cells = len(self.cells_latlon)
         all_data = []
 
-        for day_date in self.meteo_days:
+        for day_date in days_to_load:
             for cell_idx in range(nb_cells):
                 row_data = []
                 for hour in [6, 12, 18]:
@@ -538,10 +588,9 @@ class BuildMeteoPhase:
                     row_data.extend(values[cell_idx])  # Add this cell's 65 params for this hour
                 all_data.append(row_data)  # Append complete row of 195 values
 
-        # Convert to array and save - shape should be (nb_days * nb_cells, 195)
+        # Convert to array - shape should be (nb_days * nb_cells, 195)
         meteo_content = np.array(all_data, dtype=np.float32)
-        print(f"  Loaded from cache: matrix shape {meteo_content.shape}")
-        self._save_pkl("meteo_content_by_cell_day", meteo_content)
+        return meteo_content
 
     def _suggest_download(self) -> None:
         """Suggest download commands."""

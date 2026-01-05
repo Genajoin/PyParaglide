@@ -1167,7 +1167,6 @@ def build_dataset(
 
     console.print(f"\n[bold]Summary:[/bold]")
     console.print(f"  Cells: {stats['cells']}")
-    console.print(f"  Spots: {stats['spots']}")
     console.print(f"  Days: {stats['days']}")
 
     console.print(f"\n[green]Dataset build complete![/green]")

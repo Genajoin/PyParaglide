@@ -88,10 +88,11 @@ class BuildFlightsPhase:
 
         # Populate flights_by_cell_day from processed results
         for flight in result['flights']:
-            # flight is (cell_id, day_idx, flight_data)
-            cell_id, day_idx, flight_data = flight
+            # flight is a dict with 'cell_index', 'day_index', and flight data
+            cell_id = flight['cell_index']
+            day_idx = flight['day_index']
             linear_idx = day_idx * nb_cells + cell_id
-            flights_by_cell_day[linear_idx].append(flight_data)
+            flights_by_cell_day[linear_idx].append(flight)
 
         with open(self.out_dir / "flights_by_cell_day.pkl", 'wb') as f:
             pickle.dump(flights_by_cell_day, f)
