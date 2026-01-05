@@ -92,7 +92,12 @@ class BuildFlightsPhase:
             cell_id = flight['cell_index']
             day_idx = flight['day_index']
             linear_idx = day_idx * nb_cells + cell_id
-            flights_by_cell_day[linear_idx].append(flight)
+            # Convert dict to tuple format: (datetime, (score, lat, lon))
+            flight_tuple = (
+                flight['datetime'],
+                (float(flight['score']) if flight['score'] else 0.0, flight['lat'], flight['lon'])
+            )
+            flights_by_cell_day[linear_idx].append(flight_tuple)
 
         with open(self.out_dir / "flights_by_cell_day.pkl", 'wb') as f:
             pickle.dump(flights_by_cell_day, f)
