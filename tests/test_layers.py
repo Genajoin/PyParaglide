@@ -80,17 +80,19 @@ class TestFlyabilityBlock:
         """Test building and calling FlyabilityBlock."""
         other_dim = 45
         humidity_dim = 2
+        thermo_dim = 0  # baseline model
 
-        layer = FlyabilityBlock(other_dim, humidity_dim)
+        layer = FlyabilityBlock(other_dim, humidity_dim, thermo_dim)
         batch_size = 4
 
-        # Create inputs
+        # Create inputs (including thermo with empty last dimension)
         wind = tf.constant(np.random.randn(batch_size, 3), dtype=tf.float32)
         other = tf.constant(np.random.randn(batch_size, 3 * other_dim), dtype=tf.float32)
         rain = tf.constant(np.random.randn(batch_size, 3 * humidity_dim), dtype=tf.float32)
+        thermo = tf.constant(np.random.randn(batch_size, 3 * thermo_dim), dtype=tf.float32)  # empty for baseline
 
-        # Call layer
-        output = layer([wind, other, rain])
+        # Call layer with 4 inputs (wind, other, rain, thermo)
+        output = layer([wind, other, rain, thermo])
 
         # Check output shape: (batch, 1)
         assert output.shape == (batch_size, 1)
@@ -99,15 +101,17 @@ class TestFlyabilityBlock:
         """Test that output is in [0, 1] range (sigmoid activation)."""
         other_dim = 10
         humidity_dim = 2
+        thermo_dim = 0  # baseline model
 
-        layer = FlyabilityBlock(other_dim, humidity_dim)
+        layer = FlyabilityBlock(other_dim, humidity_dim, thermo_dim)
         batch_size = 10
 
         wind = tf.constant(np.random.randn(batch_size, 3) * 10, dtype=tf.float32)
         other = tf.constant(np.random.randn(batch_size, 3 * other_dim) * 10, dtype=tf.float32)
         rain = tf.constant(np.random.randn(batch_size, 3 * humidity_dim) * 10, dtype=tf.float32)
+        thermo = tf.constant(np.random.randn(batch_size, 3 * thermo_dim), dtype=tf.float32)  # empty for baseline
 
-        output = layer([wind, other, rain])
+        output = layer([wind, other, rain, thermo])
 
         # All values should be in [0, 1]
         assert np.all(output.numpy() >= 0.0)

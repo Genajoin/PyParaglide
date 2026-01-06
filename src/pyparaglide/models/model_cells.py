@@ -47,6 +47,7 @@ class ModelCells:
         other_dim: int,
         humidity_dim: int,
         nb_altitudes: int,
+        thermo_dim: int = 0,  # NEW: thermodynamic parameters
         super_resolution: int = 1,
         initialization: dict[str, Any] | None = None,
     ) -> tf.keras.Model:
@@ -101,6 +102,10 @@ class ModelCells:
             shape=(nb_cells, 1, 3, wind_dim), name="in_wind"  # nb_altitudes -> 1
         )
 
+        # NEW: Add thermo input (always created, even for baseline with thermo_dim=0)
+        input_thermo = tf.keras.layers.Input(
+            shape=(nb_cells, 3, thermo_dim), name="in_thermo"
+        )
         all_inputs = [
             input_date,
             input_dow,
@@ -108,6 +113,7 @@ class ModelCells:
             input_other,
             input_humidity,
             input_wind,
+            input_thermo,
         ]
 
         # ==============================================================================
@@ -115,7 +121,7 @@ class ModelCells:
         # ==============================================================================
 
         wind_block = WindBlockCells(name="wind_block_cells")
-        flyability_block = FlyabilityBlock(other_dim, humidity_dim, name="flyability_block")
+        flyability_block = FlyabilityBlock(other_dim, humidity_dim, thermo_dim, name="flyability_block")  # NEW: thermo_dim
         crossability_block = CrossabilityBlock(
             other_dim, humidity_dim, nb_altitudes, nb_cells, name="crossability_block"
         )
@@ -141,7 +147,8 @@ class ModelCells:
             nb_altitudes,
             other_dim,
             humidity_dim,
-            [wind_prediction, input_other, input_humidity],
+            [wind_prediction, input_other, input_humidity, input_thermo],  # NEW: added input_thermo
+            thermo_dim,  # NEW
         )
         crossability_prediction = crossability_block(
             [flyability_prediction, wind_prediction, input_other, input_humidity]
@@ -171,6 +178,7 @@ class ModelCells:
         input_dim_other: int,
         input_dim_rain: int,
         inputs: list[tf.Tensor],
+        input_dim_thermo: int = 0,  # NEW: thermo dimension
     ) -> tf.Tensor:
         """
         Encapsulate flyability prediction (simplified for nb_altitudes=1).
@@ -183,28 +191,32 @@ class ModelCells:
             nb_altitudes: Always 1 (altitude binning removed)
             input_dim_other: Other weather data dimensions
             input_dim_rain: Rain/humidity data dimensions
-            inputs: [wind, other, rain] tensors
+            input_dim_thermo: Thermo data dimensions
+            inputs: [wind, other, rain, thermo] tensors
 
         Returns:
             Flyability prediction reshaped to (batch, nb_cells, 1)
         """
-        wind, other, rain = inputs
+        wind, other, rain, thermo = inputs  # NEW: added thermo
 
         # Simplified reshaping for nb_altitudes=1 (no tiling needed)
         # Reshape to (batch * nb_cells, feature_dim) for flyability block processing
         reshape_in = tf.keras.layers.Lambda(
-            lambda x: [
+            lambda x, d_other=input_dim_other, d_rain=input_dim_rain, d_thermo=input_dim_thermo: [
                 # wind: (batch, nb_cells, 1, 3) -> (batch * nb_cells, 3)
                 tf.reshape(x[0], (-1, 3)),
                 # other: (batch, nb_cells, 3, input_dim_other) -> (batch * nb_cells, 3*input_dim_other)
-                tf.reshape(x[1], (-1, 3 * input_dim_other)),
+                tf.reshape(x[1], (-1, 3 * d_other)),
                 # rain: (batch, nb_cells, 3, input_dim_rain) -> (batch * nb_cells, 3*input_dim_rain)
-                tf.reshape(x[2], (-1, 3 * input_dim_rain)),
+                tf.reshape(x[2], (-1, 3 * d_rain)),
+                # thermo: (batch, nb_cells, 3, input_dim_thermo) -> (batch * nb_cells, 3*input_dim_thermo)
+                # IMPORTANT: Use explicit batch dimension from wind to avoid issues when d_thermo=0
+                tf.reshape(x[3], (tf.shape(x[0])[0] * tf.shape(x[0])[1], 3 * d_thermo)),
             ]
         )
 
         reshape_out = tf.keras.layers.Lambda(lambda x: tf.reshape(x, (-1, nb_cells, 1)))
 
-        pre = reshape_in([wind, other, rain])
+        pre = reshape_in([wind, other, rain, thermo])
         flyability_prediction = flyability_model(pre)
         return reshape_out(flyability_prediction)

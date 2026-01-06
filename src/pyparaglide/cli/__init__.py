@@ -486,7 +486,10 @@ def download_forecast(
     settings = get_settings()
 
     if data_dir is None:
-        data_dir = settings.gfs_dir
+        # Use parent of gfs_dir (data/gfs) instead of gfs_dir (data/gfs/anl)
+        # Forecast files should go to data/gfs/forecasts/, not data/gfs/anl/forecasts/
+        gfs_path = Path(settings.gfs_dir)
+        data_dir = str(gfs_path.parent if gfs_path.parent.name == "gfs" else gfs_path)
 
     # Parse hours
     hour_list = [int(h.strip()) for h in hours.split(",")]
@@ -605,6 +608,8 @@ def train(
     super_resolution: int = typer.Option(1, "--super-res", "-s", help="Super-resolution factor"),
     load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights"),
     early_stopping_patience: int = typer.Option(0, "--early-stopping-patience", "-p", help="Early stopping patience (0 = disabled, requires --validation)"),
+    thermo: bool = typer.Option(False, "--thermo", help="Enable thermodynamic parameters (PBLH, TCDC, CAPE, LI, CIN)"),
+    suffix: str = typer.Option("", "--suffix", help="Model suffix for versioning (e.g., '_thermo', '_baseline')"),
 ) -> None:
     """
     Train PyParaglide CELLS model for grid-based flyability prediction.
@@ -653,6 +658,8 @@ def train(
         super_resolution=super_resolution,
         load_weights=load_weights,
         early_stopping_patience=early_stopping_patience,
+        thermo=thermo,
+        suffix=suffix,
     )
 
 
@@ -668,12 +675,20 @@ def _train_cells(
     super_resolution: int,
     load_weights: bool,
     early_stopping_patience: int,
+    thermo: bool = False,
+    suffix: str = "",
 ) -> None:
     """Train CELLS model (all cells at once)."""
+    # Determine suffix if not provided
+    # Baseline: no suffix (cells.weights.h5), Thermo: _thermo suffix
+    if not suffix:
+        suffix = "_thermo" if thermo else ""
+
     console.print(f"[dim]Data directory: {data_dir}[/dim]")
     console.print(f"[dim]Models directory: {models_dir}[/dim]")
     console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
-    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
+    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]")
+    console.print(f"[dim]Thermo: {thermo}, Suffix: {suffix}[/dim]\n")
 
     # Create trainer
     trainer = Trainer(
@@ -681,6 +696,7 @@ def _train_cells(
         model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
+        thermo_dim=4 if thermo else 0,  # NEW: 4 thermo params (PBLH not available in GFS)
     )
 
     # Prepare data (all cells)
@@ -707,7 +723,7 @@ def _train_cells(
 
     # Save
     console.print("\n[yellow]Saving model...[/yellow]")
-    trainer.save_weights()
+    trainer.save_weights(suffix=suffix)  # NEW: use suffix for versioning
 
     # Results
     final_loss = history["loss"][-1]
@@ -922,7 +938,10 @@ def forecast(
     if models_dir is None:
         models_dir = settings.models_dir
     if grib_dir is None:
-        grib_dir = str(Path(settings.gfs_dir) / "forecasts")
+        # Use parent of gfs_dir (data/gfs) instead of gfs_dir (data/gfs/anl)
+        # Forecast files should be in data/gfs/forecasts/, not data/gfs/anl/forecasts/
+        gfs_path = Path(settings.gfs_dir)
+        grib_dir = str(gfs_path.parent / "forecasts" if gfs_path.parent.name == "gfs" else gfs_path / "forecasts")
     if output_dir is None:
         output_dir = settings.output_dir
     if bbox is None:
@@ -973,6 +992,124 @@ def forecast(
 
     console.print(f"\n[green]Forecast complete![/green]")
     console.print(f"Output: [cyan]{output_path}[/cyan]")
+
+
+@app.command()
+def forecast_ab_test(
+    date: str = typer.Option(None, "--date", "-d", help="Target date (YYYY-MM-DD, default: today)"),
+    models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
+    grib_dir: str = typer.Option(None, "--grib-dir", "-g", help="Directory containing GRIB files"),
+    output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for A/B test results"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+    baseline_variant: str = typer.Option("", "--baseline", help="Baseline model variant (default: empty for cells.weights.h5)"),
+    thermo_variant: str = typer.Option("thermo", "--thermo", help="Thermo model variant (default: thermo for cells_thermo.weights.h5)"),
+) -> None:
+    """
+    Generate A/B test forecast comparing baseline and thermo-enhanced models.
+
+    Example:
+        pyparaglide forecast-ab-test --date 2025-06-15
+    """
+    import datetime as dt
+    import json
+
+    import numpy as np  # NEW: needed for np.mean in comparison
+
+    settings = get_settings()
+
+    # Use defaults from settings if not specified
+    if models_dir is None:
+        models_dir = settings.models_dir
+    if grib_dir is None:
+        # Use parent of gfs_dir (data/gfs) instead of gfs_dir (data/gfs/anl)
+        # Forecast files should be in data/gfs/forecasts/, not data/gfs/anl/forecasts/
+        gfs_path = Path(settings.gfs_dir)
+        grib_dir = str(gfs_path.parent / "forecasts" if gfs_path.parent.name == "gfs" else gfs_path / "forecasts")
+    if output_dir is None:
+        output_dir = str(Path(settings.output_dir) / "ab_tests")
+    if bbox is None:
+        bbox = settings.bbox
+
+    # Parse date
+    if date is None:
+        target_date = dt.date.today()
+    else:
+        try:
+            target_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
+        except ValueError:
+            console.print(f"[red]Invalid date format: {date}[/red]")
+            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
+            raise typer.Exit(1)
+
+    console.print(f"[bold cyan]A/B Testing: baseline vs thermo[/bold cyan]")
+    console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
+    console.print(f"[dim]Models: {models_dir}[/dim]")
+    console.print(f"[dim]Baseline: {baseline_variant}, Thermo: {thermo_variant}[/dim]\n")
+
+    # Find GRIB files for the target date
+    grib_path = Path(grib_dir)
+    grib_files = []
+    for hour in [6, 12, 18]:
+        grib_file = grib_path / f"{target_date.strftime('%Y%m%d')}-{hour:02d}.grib2"
+        if grib_file.exists():
+            grib_files.append(grib_file)
+        else:
+            console.print(f"[yellow]Warning: GRIB file not found: {grib_file}[/yellow]")
+
+    if len(grib_files) < 3:
+        console.print(f"[red]Error: Found only {len(grib_files)}/3 GRIB files[/red]")
+        console.print("Expected files for 06h, 12h, 18h forecasts")
+        raise typer.Exit(1)
+
+    # Create output directory
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Generate baseline forecast
+    console.print("[yellow]Loading baseline model...[/yellow]")
+    forecaster_baseline = Forecaster(models_dir, ProblemFormulation.CLASSIFICATION, model_variant=baseline_variant)
+
+    console.print("[yellow]Running baseline prediction...[/yellow]")
+    results_baseline = forecaster_baseline.predict_day(grib_files, target_date, tuple(float(x) for x in bbox.split(",")))
+
+    # Generate thermo forecast
+    console.print("[yellow]Loading thermo model...[/yellow]")
+    forecaster_thermo = Forecaster(models_dir, ProblemFormulation.CLASSIFICATION, model_variant=thermo_variant)
+
+    console.print("[yellow]Running thermo prediction...[/yellow]")
+    results_thermo = forecaster_thermo.predict_day(grib_files, target_date, tuple(float(x) for x in bbox.split(",")))
+
+    # Compare results
+    # Extract flyability values from predictions list
+    baseline_flyability = [p["flyability"] for p in results_baseline.get("predictions", [])]
+    thermo_flyability = [p["flyability"] for p in results_thermo.get("predictions", [])]
+
+    baseline_mean = np.mean(baseline_flyability) if baseline_flyability else 0.0
+    thermo_mean = np.mean(thermo_flyability) if thermo_flyability else 0.0
+    difference = thermo_mean - baseline_mean
+
+    comparison = {
+        "date": target_date.isoformat(),
+        "baseline_variant": baseline_variant,
+        "thermo_variant": thermo_variant,
+        "baseline_mean_flyability": float(baseline_mean),
+        "thermo_mean_flyability": float(thermo_mean),
+        "difference_mean_flyability": float(difference),
+        "baseline_results": results_baseline,
+        "thermo_results": results_thermo,
+    }
+
+    # Save results
+    output_file = output_path / f"ab_test_{target_date.isoformat()}.json"
+    console.print("[yellow]Saving A/B test results...[/yellow]")
+    with open(output_file, "w") as f:
+        json.dump(comparison, f, indent=2)
+
+    console.print(f"\n[green]A/B test complete![/green]")
+    console.print(f"Baseline mean flyability: [cyan]{baseline_mean:.4f}[/cyan]")
+    console.print(f"Thermo mean flyability: [cyan]{thermo_mean:.4f}[/cyan]")
+    console.print(f"Difference: [cyan]{difference:+.4f}[/cyan]")
+    console.print(f"Output: [cyan]{output_file}[/cyan]")
 
 
 @app.command()

@@ -19,13 +19,14 @@ class FlyabilityBlock(tf.keras.Model):
     """
     Main flyability prediction block.
 
-    Combines wind, other weather, and rain data to predict flyability.
+    Combines wind, other weather, rain, and thermo data to predict flyability.
     """
 
-    def __init__(self, other_dim: int, humidity_dim: int, name: str = "flyability_block"):
+    def __init__(self, other_dim: int, humidity_dim: int, thermo_dim: int = 0, name: str = "flyability_block"):
         super().__init__(name=name)
         self.other_dim = other_dim
         self.humidity_dim = humidity_dim
+        self.thermo_dim = thermo_dim  # NEW
         self.batch_normalization = True
         self.dropout_rate = 0.0
 
@@ -42,8 +43,8 @@ class FlyabilityBlock(tf.keras.Model):
         self.dense3 = tf.keras.layers.Dense(1, activation="sigmoid", name="Flyability_2")
 
     def call(self, inputs: list[tf.Tensor], training: bool = False) -> tf.Tensor:
-        wind, other, rain = inputs
-        x = self.concat([wind, other, rain])
+        wind, other, rain, thermo = inputs  # NEW: added thermo
+        x = self.concat([wind, other, rain, thermo])  # Now includes thermo
         x = self.dropout1(x, training=training)
         x = self.dense1(x)
         if self.batch_normalization:

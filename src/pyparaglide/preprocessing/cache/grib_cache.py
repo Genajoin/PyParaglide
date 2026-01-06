@@ -145,10 +145,10 @@ class GribCache:
 
         Args:
             grib_path: Path to source GRIB file (can be str or Path)
-            flatten: If True, return flat array (nb_cells * 65,), else (nb_cells, 65)
+            flatten: If True, return flat array (nb_cells * 69,), else (nb_cells, 69)
 
         Returns:
-            Cached values array - flat if flatten=True, else (nb_cells, 65)
+            Cached values array - flat if flatten=True, else (nb_cells, 69)
 
         Raises:
             FileNotFoundError: If cache file doesn't exist
@@ -181,9 +181,9 @@ class GribCache:
 
         Args:
             grib_path: Path to source GRIB file (can be str or Path)
-            values: Extracted parameter values array of shape (nb_cells, 65)
+            values: Extracted parameter values array of shape (nb_cells, 69)
             config: Configuration dict with 'bbox', 'cells_latlon', 'nb_cells'
-            params: List of 65 (name, level) tuples used for extraction (optional)
+            params: List of 69 (name, level) tuples used for extraction (optional)
         """
         grib_path = Path(grib_path)
         cache_path = self._get_full_cache_path(grib_path)

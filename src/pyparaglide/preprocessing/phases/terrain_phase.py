@@ -100,6 +100,10 @@ class BuildTerrainPhase:
                 mountainess = self._get_mountainess(lat, lon)
                 mountainess_by_cell_alt.append([mountainess] * 5)
 
+        # Convert to numpy array for consistent shape handling
+        import numpy as np
+        mountainess_by_cell_alt = np.array(mountainess_by_cell_alt, dtype=np.float32)
+
         self._save_pkl("mountainess_by_cell_alt", mountainess_by_cell_alt)
 
         # Save metadata

@@ -87,7 +87,7 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir
     Args:
         job_queue: Queue with (day_date, hour, temp_path) tuples
         hourly_queue: Queue for (day_date, hour, values) results
-        grib_params: List of 65 GRIB parameters to extract
+        grib_params: List of 69 GRIB parameters to extract (65 base + 4 thermo)
         cells_latlon: List of (lat, lon) cell coordinates
         cache_dir: Path to GRIB cache directory (None = disable cache)
     """
@@ -194,7 +194,7 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir
                 # Save to cache if enabled and grib_path is provided
                 if cache and grib_path and values is not None:
                     try:
-                        # Reshape flat values to (nb_cells, 65) for cache
+                        # Reshape flat values to (nb_cells, 69) for cache
                         cached_values = np.array(values, dtype=np.float32).reshape(len(cells_latlon), len(grib_params))
                         cache.save(
                             grib_path,
@@ -228,7 +228,7 @@ def assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells)
     Args:
         hourly_queue: Queue with (day_date, hour, values) tuples
         day_results_queue: Queue where completed day_data is placed
-        num_params: Number of parameters (65)
+        num_params: Number of parameters per hour (69: 65 base + 4 thermo)
         num_cells: Number of cells
     """
     hours_collected = {}  # (day_date, hour) -> values list
@@ -265,7 +265,7 @@ def assemble_day_results(hourly_queue, day_results_queue, num_params, num_cells)
            (day_date, 18) in hours_collected:
 
             # Assemble day data: [cell1_values, cell2_values, ...]
-            # where cell_values = [hour6_param1..65, hour12_param1..65, hour18_param1..65]
+            # where cell_values = [hour6_param1..69, hour12_param1..69, hour18_param1..69]
             day_data = []
             for cell_idx in range(num_cells):
                 cell_values = []
