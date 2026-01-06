@@ -743,6 +743,8 @@ def evaluate(
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
     threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
     output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC)"),
+    thermo: bool = typer.Option(False, "--thermo", help="Model uses thermodynamic parameters"),
+    suffix: str = typer.Option("", "--suffix", "-s", help="Model suffix for versioning (e.g., '_thermo', '_baseline')"),
 ) -> None:
     """
     Evaluate trained model performance on a specific test year.
@@ -757,7 +759,7 @@ def evaluate(
     - crossed: XC cross-country potential
 
     Example:
-        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed
+        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed --thermo --suffix _thermo
     """
     import numpy as np
     from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
@@ -771,10 +773,15 @@ def evaluate(
     if models_dir is None:
         models_dir = settings.models_dir
 
+    # Determine suffix if not provided
+    if not suffix:
+        suffix = "_thermo" if thermo else ""
+
     console.print(f"[bold cyan]Evaluating CELLS model on year {year}[/bold cyan]")
     console.print(f"[dim]Data: {data_dir}[/dim]")
     console.print(f"[dim]Models: {models_dir}[/dim]")
-    console.print(f"[dim]Threshold: {threshold}[/dim]\n")
+    console.print(f"[dim]Threshold: {threshold}[/dim]")
+    console.print(f"[dim]Thermo: {thermo}, Suffix: {suffix}[/dim]\n")
 
     # Initialize Trainer
     trainer = Trainer(
@@ -782,6 +789,7 @@ def evaluate(
         model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
+        thermo_dim=4 if thermo else 0,
     )
 
     # Find indices for the test year
@@ -843,7 +851,7 @@ def evaluate(
 
     # Load Model & Predict
     console.print("[yellow]Loading model and predicting...[/yellow]")
-    trainer.create_model(cells=cells_to_use, load_weights=True)
+    trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix=suffix)
 
     preds = trainer.model.predict(X_test, verbose=1)
 
