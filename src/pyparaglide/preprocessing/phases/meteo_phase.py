@@ -303,7 +303,7 @@ class BuildMeteoPhase:
         return meteo_days
 
     def _build_meteo_params(self) -> List:
-        """Build list of weather parameters (195 total: 65 params x 3 hours)."""
+        """Build list of weather parameters (207 total: 65 params x 3 hours + 4 thermo x 3 hours)."""
         meteo_params = []
 
         for hour in [6, 12, 18]:
@@ -324,6 +324,12 @@ class BuildMeteoPhase:
                 for level in pressure_levels:
                     meteo_params.append((hour, param_name, [[('isobaricInhPa', level)]]))
 
+            # Thermodynamic parameters (NEW) - 4 params (PBLH not available in GFS)
+            meteo_params.append((hour, 'Total Cloud Cover', [[('atmosphere', 0)], [('atmosphereSingleLayer', 0)], [('unknown', 0)]]))
+            meteo_params.append((hour, 'Convective available potential energy', [[('surface', 0)]]))
+            meteo_params.append((hour, 'Surface lifted index', [[('surface', 0)]]))
+            meteo_params.append((hour, 'Convective inhibition', [[('surface', 0)]]))
+
         print(f"  Total parameters: {len(meteo_params)}")
         return meteo_params
 
@@ -333,7 +339,9 @@ class BuildMeteoPhase:
 
         if not self.meteo_days or GribReader is None:
             print("  WARNING: No meteo days or GRIB reader. Creating zeros matrix.")
-            matrix = np.zeros((0, 195), dtype=np.float32)
+            # Calculate expected parameters: 65 (base) + 5 (thermo) = 70 per hour, 3 hours = 210
+            num_params = len(self._build_meteo_params())
+            matrix = np.zeros((0, num_params), dtype=np.float32)
             self._save_pkl("meteo_content_by_cell_day", matrix)
             return
 
@@ -392,7 +400,7 @@ class BuildMeteoPhase:
         if not self.use_cache:
             missing_days = self.meteo_days[:]
 
-        # Build GRIB params (65 without hour dimension)
+        # Build GRIB params (70 without hour dimension: 65 base + 5 thermo)
         grib_params = []
         for param in ['Precipitable water', 'Cloud water']:
             grib_params.append((param, [('entireAtmosphere', 0), ('atmosphereSingleLayer', 0), ('unknown', 0)]))
@@ -403,8 +411,18 @@ class BuildMeteoPhase:
             for level in pressure_levels:
                 grib_params.append((param, [('isobaricInhPa', level)]))
 
-        if len(grib_params) != 65:
-            print(f"  ERROR: Expected 65 parameters, got {len(grib_params)}")
+        # Thermodynamic parameters (NEW) - using actual GRIB parameter names
+        # Note: PBLH is NOT available in GFS analysis data, using 4 thermo params instead of 5
+        # Total Cloud Cover exists with typeOfLevel='atmosphere'
+        grib_params.append(('Total Cloud Cover', [('atmosphere', 0), ('atmosphereSingleLayer', 0), ('unknown', 0)]))
+        # CAPE and CIN exist at surface
+        grib_params.append(('Convective available potential energy', [('surface', 0)]))
+        # Lifted Index exists as "Surface lifted index" (not "Best (4-layer)")
+        grib_params.append(('Surface lifted index', [('surface', 0)]))
+        grib_params.append(('Convective inhibition', [('surface', 0)]))
+
+        if len(grib_params) != 69:
+            print(f"  ERROR: Expected 69 parameters (65 base + 4 thermo), got {len(grib_params)}")
             return
 
         # Multiprocessing setup - process only missing_days
@@ -560,15 +578,15 @@ class BuildMeteoPhase:
         """
         Load meteo data from cache for specified days.
 
-        Produces matrix of shape (nb_days * nb_cells, 195) where each row is
-        [hour6_params(65), hour12_params(65), hour18_params(65)] for a single day-cell.
+        Produces matrix of shape (nb_days * nb_cells, 207) where each row is
+        [hour6_params(69), hour12_params(69), hour18_params(69)] for a single day-cell.
 
         Args:
             cache: GribCache instance
             days_to_load: List of dates to load (default: all self.meteo_days)
 
         Returns:
-            numpy array of shape (nb_days * nb_cells, 195)
+            numpy array of shape (nb_days * nb_cells, 207)
         """
         import numpy as np
 
@@ -583,12 +601,12 @@ class BuildMeteoPhase:
                 row_data = []
                 for hour in [6, 12, 18]:
                     grb_path = self.gfs_dir / day_date.strftime('%Y-%m') / f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
-                    # Load from cache (already validated) - returns (nb_cells, 65)
+                    # Load from cache (already validated) - returns (nb_cells, 69)
                     values = cache.load(grb_path, flatten=False)
-                    row_data.extend(values[cell_idx])  # Add this cell's 65 params for this hour
-                all_data.append(row_data)  # Append complete row of 195 values
+                    row_data.extend(values[cell_idx])  # Add this cell's 69 params for this hour
+                all_data.append(row_data)  # Append complete row of 207 values
 
-        # Convert to array - shape should be (nb_days * nb_cells, 195)
+        # Convert to array - shape should be (nb_days * nb_cells, 207)
         meteo_content = np.array(all_data, dtype=np.float32)
         return meteo_content
 

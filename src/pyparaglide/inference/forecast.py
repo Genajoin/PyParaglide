@@ -30,6 +30,7 @@ class Forecaster:
         self,
         models_dir: Path | str,
         problem_formulation: ProblemFormulation = ProblemFormulation.CLASSIFICATION,
+        model_variant: str = "",  # NEW: "" for default, or "baseline", "thermo", etc.
     ):
         """
         Initialize forecaster.
@@ -37,9 +38,11 @@ class Forecaster:
         Args:
             models_dir: Directory containing trained model weights
             problem_formulation: CLASSIFICATION or REGRESSION
+            model_variant: Model variant for A/B testing (e.g., "baseline", "thermo")
         """
         self.models_dir = Path(models_dir)
         self.problem_formulation = problem_formulation
+        self.model_variant = model_variant  # NEW
 
         # Model parameters
         self.wind_dim = 8
@@ -49,7 +52,7 @@ class Forecaster:
         # Model and normalization (loaded later)
         self.model: tf.keras.Model | None = None
         self.normalization: Normalization | None = None
-        
+
         # Mountainess data (loaded from models_dir)
         self.mountainess_data: np.ndarray | None = None
 
@@ -60,7 +63,9 @@ class Forecaster:
         Returns:
             Number of cells detected from weights
         """
-        weight_path = self.models_dir / "cells.weights.h5"
+        # Use variant-specific weight file
+        suffix = f"_{self.model_variant}" if self.model_variant else ""
+        weight_path = self.models_dir / f"cells{suffix}.weights.h5"
 
         import h5py
 
@@ -91,8 +96,10 @@ class Forecaster:
 
     def load_model(self) -> None:
         """Load trained CELLS model and normalization coefficients."""
-        # Load normalization
-        norm_path = self.models_dir / "normalization_cells.pkl"
+        # Use variant-specific file paths
+        suffix = f"_{self.model_variant}" if self.model_variant else ""
+        norm_path = self.models_dir / f"normalization_cells{suffix}.pkl"
+
         if norm_path.exists():
             self.normalization = Normalization.load(norm_path)
         else:
@@ -100,6 +107,9 @@ class Forecaster:
 
         # Detect nb_cells from weights file before creating model
         self.nb_cells = self._detect_nb_cells_from_weights()
+
+        # Detect thermo_dim from normalization (NEW)
+        thermo_dim = 4 if self.normalization.thermo_mean is not None else 0
 
         # Create and load CELLS model
         self.model = ModelCells.create_model(
@@ -109,17 +119,18 @@ class Forecaster:
             other_dim=self.normalization.other_mean.shape[0],
             humidity_dim=self.normalization.humidity_mean.shape[0],
             nb_altitudes=self.nb_altitudes,
+            thermo_dim=thermo_dim,  # NEW
             super_resolution=1,
         )
 
         # Load weights
-        weight_path = self.models_dir / "cells.weights.h5"
+        weight_path = self.models_dir / f"cells{suffix}.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded model from {weight_path}")
         else:
             raise FileNotFoundError(f"Model weights not found: {weight_path}")
-        
+
         # Load mountainess data
         self._load_mountainess_data()
 
@@ -176,31 +187,39 @@ class Forecaster:
 
         # Weather data from GRIB files
         # This is simplified - full implementation needs proper grid extraction
-        X_other, X_wind, X_humidity = self._extract_weather_data(readers, bbox)
+        X_other, X_wind, X_humidity, X_thermo = self._extract_weather_data(readers, bbox)
 
         # Mountainess data from elevation analysis
-        nb_cells = self.nb_cells
         X_mountainess = self._get_mountainess_inputs()
 
-        # Combine all inputs
-        return [X_date, X_dow, X_mountainess, X_other, X_humidity, X_wind]
+        # Combine all inputs (ALWAYS include thermo, even if empty for baseline models)
+        # Model always expects 7 inputs matching its signature
+        inputs = [X_date, X_dow, X_mountainess, X_other, X_humidity, X_wind, X_thermo]
+
+        return inputs
 
     def _extract_weather_data(
         self, readers: list[GribReader], bbox: tuple[float, float, float, float]
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Extract weather data from GRIB files.
 
         Returns:
-            (X_other, X_wind, X_humidity) tuple
+            (X_other, X_wind, X_humidity, X_thermo) tuple
+            X_thermo has shape (1, nb_cells, 3, thermo_dim) where thermo_dim=0 for baseline models
         """
         nb_hours = 3
         nb_cells = self.nb_cells
+
+        # Check if model expects thermo data and determine thermo_dim
+        thermo_dim = 4 if self.normalization.thermo_mean is not None else 0
 
         # Extract for each forecast hour
         X_other = np.zeros((1, nb_cells, nb_hours, 45), dtype=np.float32)  # 5 params × 9 levels
         X_humidity = np.zeros((1, nb_cells, nb_hours, 2), dtype=np.float32)  # PWAT, CWAT
         X_wind = np.zeros((1, nb_cells, 1, nb_hours, self.wind_dim), dtype=np.float32)  # nb_altitudes=1
+        # Always create thermo array (empty for baseline models with thermo_dim=0)
+        X_thermo = np.zeros((1, nb_cells, nb_hours, thermo_dim), dtype=np.float32)
 
         for h, reader in enumerate(readers):
             # This is simplified - proper implementation needs:
@@ -222,6 +241,19 @@ class Forecaster:
                     data = reader.get_bbox_data(name, bbox, None)
                     if data is not None:
                         X_humidity[0, cell_idx, h, param_idx] = np.mean(data)
+
+                # Extract thermo parameters (NEW) - 4 params (PBLH not available)
+                if thermo_dim > 0:
+                    thermo_params = [
+                        ("Total Cloud Cover", "atmosphere"),
+                        ("Convective available potential energy", "surface"),
+                        ("Surface lifted index", "surface"),
+                        ("Convective inhibition", "surface"),
+                    ]
+                    for param_idx, (name, level_type) in enumerate(thermo_params):
+                        data = reader.get_bbox_data(name, bbox, level_type)
+                        if data is not None:
+                            X_thermo[0, cell_idx, h, param_idx] = np.mean(data)
 
                 # Extract wind and convert to direction bins (averaged over 5 altitudes)
                 wind_dirs_avg = np.zeros(self.wind_dim, dtype=np.float32)
@@ -257,7 +289,15 @@ class Forecaster:
                         hum_flat[:, i] = (hum_flat[:, i] - self.normalization.humidity_mean[i]) / self.normalization.humidity_std[i]
                 X_humidity[0, :, h, :] = hum_flat.reshape(nb_cells, -1)
 
-        return X_other, X_wind, X_humidity
+                # Normalize thermo (NEW) - only if thermo_dim > 0 and normalization exists
+                if X_thermo.shape[-1] > 0 and self.normalization.thermo_mean is not None:
+                    thermo_flat = X_thermo[0, :, h, :].reshape(-1, X_thermo.shape[-1])
+                    for i in range(thermo_flat.shape[1]):
+                        if i < len(self.normalization.thermo_mean):
+                            thermo_flat[:, i] = (thermo_flat[:, i] - self.normalization.thermo_mean[i]) / self.normalization.thermo_std[i]
+                    X_thermo[0, :, h, :] = thermo_flat.reshape(nb_cells, -1)
+
+        return X_other, X_wind, X_humidity, X_thermo  # NEW: added X_thermo
 
     def _format_results(self, predictions: list[np.ndarray], target_date: dt.date, bbox: tuple[float, float, float, float]) -> dict[str, Any]:
         """Format CELLS prediction results into output dictionary."""
@@ -286,32 +326,36 @@ class Forecaster:
     def _load_mountainess_data(self) -> None:
         """
         Load mountainess data from mountainess_by_cell_alt.pkl file.
-        
+
         This file contains terrain mountainess values for each grid cell,
         computed from elevation data during model training.
         """
-        mountainess_path = self.models_dir / "mountainess_by_cell_alt.pkl"
-        
-        if mountainess_path.exists():
-            try:
-                with open(mountainess_path, "rb") as f:
-                    self.mountainess_data = pickle.load(f)
-                print(f"[INFO] Loaded mountainess data from {mountainess_path}")
-                
-                # Validate shape
-                if self.mountainess_data is not None and self.mountainess_data.shape[0] != self.nb_cells:
-                    print(f"[WARNING] Mountainess data has {self.mountainess_data.shape[0]} cells, "
-                          f"but model expects {self.nb_cells}. Using first {self.nb_cells} cells.")
-                    self.mountainess_data = self.mountainess_data[:self.nb_cells]
-                    
-            except Exception as e:
-                print(f"[WARNING] Failed to load mountainess data from {mountainess_path}: {e}")
-                print("[INFO] Using default mountainess values (zeros)")
-                self.mountainess_data = None
-        else:
-            print(f"[WARNING] Mountainess file not found: {mountainess_path}")
-            print("[INFO] Using default mountainess values (zeros)")
-            self.mountainess_data = None
+        settings = get_settings()
+
+        # Try pkl_dir first (where build-dataset saves it), then models_dir for backwards compatibility
+        for base_dir, desc in [(Path(settings.pkl_dir), "PKL directory"), (self.models_dir, "models directory")]:
+            mountainess_path = base_dir / "mountainess_by_cell_alt.pkl"
+
+            if mountainess_path.exists():
+                try:
+                    with open(mountainess_path, "rb") as f:
+                        self.mountainess_data = pickle.load(f)
+                    print(f"[INFO] Loaded mountainess data from {mountainess_path}")
+
+                    # Validate shape
+                    if self.mountainess_data is not None and self.mountainess_data.shape[0] != self.nb_cells:
+                        print(f"[WARNING] Mountainess data has {self.mountainess_data.shape[0]} cells, "
+                              f"but model expects {self.nb_cells}. Using first {self.nb_cells} cells.")
+                        self.mountainess_data = self.mountainess_data[:self.nb_cells]
+
+                    return  # Success, exit early
+
+                except Exception as e:
+                    print(f"[WARNING] Failed to load mountainess data from {mountainess_path}: {e}")
+
+        # If we get here, no file was found or loaded successfully
+        print("[INFO] Using default mountainess values (zeros)")
+        self.mountainess_data = None
     
     def _get_mountainess_inputs(self) -> np.ndarray:
         """

@@ -30,6 +30,7 @@ class Trainer:
         model_type: ModelType = ModelType.CELLS,
         problem_formulation: ProblemFormulation = ProblemFormulation.CLASSIFICATION,
         models_dir: Path | str = "data/models",
+        thermo_dim: int = 0,  # NEW: number of thermo parameters (0 or 4)
     ):
         """
         Initialize trainer.
@@ -39,11 +40,13 @@ class Trainer:
             model_type: Must be ModelType.CELLS
             problem_formulation: CLASSIFICATION or REGRESSION
             models_dir: Directory to save/load model weights
+            thermo_dim: Number of thermo parameters (0 for baseline, 4 for thermo-enhanced)
         """
         self.data_dir = Path(data_dir)
         self.model_type = model_type
         self.problem_formulation = problem_formulation
         self.models_dir = Path(models_dir)
+        self.thermo_dim = thermo_dim  # NEW
 
         # Model parameters
         self.wind_dim = 8
@@ -72,30 +75,62 @@ class Trainer:
         if cells is None:
             cells = list(range(self.nb_cells))
 
+        # NEW: Validate dataset integrity BEFORE loading any data
+        expected_cols = len(self.dataset.meteo_params)
+        actual_cols = self.dataset.meteo_content.shape[1]
+        if actual_cols != expected_cols:
+            import sys
+            if self.thermo_dim > 0 and actual_cols < expected_cols:
+                print("\n" + "=" * 70)
+                print("ERROR: Dataset out of sync - rebuild required!")
+                print("=" * 70)
+                print(f"\nDataset metadata expects {expected_cols} parameters")
+                print(f"Dataset data has {actual_cols} parameters")
+                print("\nThe dataset was partially updated but not fully rebuilt.")
+                print("You need to rebuild the dataset to include thermo parameters:\n")
+                print("  pyparaglide build-dataset --rebuild-cache")
+                print("\n" + "=" * 70)
+                sys.exit(1)
+
         # Load weather data for CELLS: meteo data is organized as (nb_cells * nb_days, dim)
         X_other = [self.dataset.get_meteo_matrix(cells, self.dataset.params_other[h]) for h in range(3)]
         X_wind = [convert_wind_matrix(self.dataset.get_meteo_matrix(cells, self.dataset.params_wind[h]), self.wind_dim) for h in range(3)]
         X_humidity = [self.dataset.get_meteo_matrix(cells, self.dataset.params_humidity[h]) for h in range(3)]
+
+        # Load thermo data if enabled (NEW)
+        X_thermo = None
+        if self.thermo_dim > 0:
+            # Now safe to access thermo parameters
+            X_thermo = [self.dataset.get_meteo_matrix(cells, self.dataset.params_thermo[h]) for h in range(3)]
 
         # Compute normalization (based on hour 1 = 12h)
         print("[INFO] Computing normalization from data")
         norm_mean_other, norm_std_other = compute_normalization_coeffs(X_other[1])
         norm_mean_hum, norm_std_hum = compute_normalization_coeffs(X_humidity[1])
 
+        # Compute thermo normalization if enabled (NEW)
+        norm_mean_thermo, norm_std_thermo = None, None
+        if X_thermo is not None:
+            norm_mean_thermo, norm_std_thermo = compute_normalization_coeffs(X_thermo[1])
+
         self.normalization = Normalization(
             other_mean=norm_mean_other,
             other_std=norm_std_other,
             humidity_mean=norm_mean_hum,
             humidity_std=norm_std_hum,
+            thermo_mean=norm_mean_thermo,  # NEW
+            thermo_std=norm_std_thermo,    # NEW
         )
 
         # Apply normalization
         for h in range(3):
             X_other[h] = apply_normalization(X_other[h], norm_mean_other, norm_std_other)
             X_humidity[h] = apply_normalization(X_humidity[h], norm_mean_hum, norm_std_hum)
+            if X_thermo is not None:  # NEW
+                X_thermo[h] = apply_normalization(X_thermo[h], norm_mean_thermo, norm_std_thermo)
 
         # Prepare inputs
-        X = self._prepare_inputs(cells, X_other, X_wind, X_humidity, super_resolution)
+        X = self._prepare_inputs(cells, X_other, X_wind, X_humidity, X_thermo, super_resolution)  # NEW: added X_thermo
         Y = self._prepare_outputs(cells, super_resolution)
 
         return X, Y
@@ -106,6 +141,7 @@ class Trainer:
         X_other: list[np.ndarray],
         X_wind: list[np.ndarray],
         X_humidity: list[np.ndarray],
+        X_thermo: list[np.ndarray] | None,  # NEW
         super_resolution: int,
     ) -> list:
         """Prepare input tensors for CELLS model."""
@@ -129,6 +165,19 @@ class Trainer:
         X_humidity_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_humidity), dtype=np.float32)
 
         X_wind_stacked = np.zeros((self.nb_days, nb_cells_model, 1, 3, self.wind_dim), dtype=np.float32)
+
+        # Initialize thermo stacked array (ALWAYS create, even for baseline with thermo_dim=0)
+        # This ensures the model always receives 7 inputs matching its expected input signature
+        dim_thermo = self.thermo_dim  # 0 for baseline, 4 for thermo
+        X_thermo_stacked = np.zeros((self.nb_days, nb_cells_model, 3, dim_thermo), dtype=np.float32)
+
+        # Fill with actual thermo data if available
+        if X_thermo is not None:
+            for h in range(3):
+                for i, cell in enumerate(cells):
+                    start_idx = i * self.nb_days
+                    end_idx = start_idx + self.nb_days
+                    X_thermo_stacked[:, i, h, :] = X_thermo[h][start_idx:end_idx, :]
 
         for h in range(3):
             for i, cell in enumerate(cells):
@@ -154,7 +203,11 @@ class Trainer:
                 # Assign to stacked array
                 X_wind_stacked[:, i, 0, h, :] = wind_reshaped[:, 0, :]
 
-        return [X_date, X_dow, X_mountainess, X_other_stacked, X_humidity_stacked, X_wind_stacked]
+        # Build input list (ALWAYS include thermo - even when dim_thermo=0)
+        # Model expects 7 inputs matching its signature
+        inputs = [X_date, X_dow, X_mountainess, X_other_stacked, X_humidity_stacked, X_wind_stacked, X_thermo_stacked]
+
+        return inputs
 
     def _prepare_outputs(self, cells: list[int], super_resolution: int) -> list:
         """Prepare output tensors for CELLS model."""
@@ -198,6 +251,7 @@ class Trainer:
             other_dim=45,  # Will be updated from data
             humidity_dim=2,
             nb_altitudes=self.nb_altitudes,
+            thermo_dim=self.thermo_dim,  # NEW
             super_resolution=super_resolution,
         )
 

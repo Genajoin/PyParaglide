@@ -39,8 +39,8 @@ class TestModelCells:
         assert model is not None
         assert isinstance(model, tf.keras.Model)
 
-        # Check number of inputs
-        assert len(model.inputs) == 6
+        # Check number of inputs (7 inputs including in_thermo)
+        assert len(model.inputs) == 7
 
         # Check input names
         input_names = [inp.name.split(":")[0] for inp in model.inputs]
@@ -50,6 +50,7 @@ class TestModelCells:
         assert "in_other" in input_names
         assert "in_rain" in input_names
         assert "in_wind" in input_names
+        assert "in_thermo" in input_names
 
         # Check number of outputs (2 outputs: flown, crossed)
         assert len(model.outputs) == 2
@@ -79,12 +80,13 @@ class TestModelCells:
             other_dim=45,
             humidity_dim=2,
             nb_altitudes=1,
+            thermo_dim=0,  # baseline model
             super_resolution=1,
         )
 
         batch_size = 4
 
-        # Create inputs
+        # Create inputs (including in_thermo with empty last dimension)
         inputs = {
             "in_date": tf.constant(np.random.rand(batch_size, 1), dtype=tf.float32),
             "in_dow": tf.constant(np.random.rand(batch_size, 7), dtype=tf.float32),
@@ -92,6 +94,7 @@ class TestModelCells:
             "in_other": tf.constant(np.random.randn(batch_size, 1, 3, 45), dtype=tf.float32),
             "in_rain": tf.constant(np.random.randn(batch_size, 1, 3, 2), dtype=tf.float32),
             "in_wind": tf.constant(np.random.randn(batch_size, 1, 1, 3, 8), dtype=tf.float32),
+            "in_thermo": tf.constant(np.random.randn(batch_size, 1, 3, 0), dtype=tf.float32),  # empty thermo
         }
 
         # Run forward pass
@@ -113,6 +116,7 @@ class TestModelCells:
             other_dim=45,
             humidity_dim=2,
             nb_altitudes=1,
+            thermo_dim=0,  # baseline model
             super_resolution=1,
         )
 
@@ -125,6 +129,7 @@ class TestModelCells:
             "in_other": tf.constant(np.random.randn(batch_size, 1, 3, 45), dtype=tf.float32),
             "in_rain": tf.constant(np.random.randn(batch_size, 1, 3, 2), dtype=tf.float32),
             "in_wind": tf.constant(np.random.randn(batch_size, 1, 1, 3, 8), dtype=tf.float32),
+            "in_thermo": tf.constant(np.random.randn(batch_size, 1, 3, 0), dtype=tf.float32),  # empty thermo
         }
 
         outputs = model(inputs)
@@ -145,6 +150,7 @@ class TestModelCells:
             other_dim=45,
             humidity_dim=2,
             nb_altitudes=1,
+            thermo_dim=0,  # baseline model
             super_resolution=super_resolution,
         )
 
@@ -157,6 +163,7 @@ class TestModelCells:
             "in_other": tf.constant(np.random.randn(batch_size, 1, 3, 45), dtype=tf.float32),
             "in_rain": tf.constant(np.random.randn(batch_size, 1, 3, 2), dtype=tf.float32),
             "in_wind": tf.constant(np.random.randn(batch_size, 1, 1, 3, 8), dtype=tf.float32),
+            "in_thermo": tf.constant(np.random.randn(batch_size, 1, 3, 0), dtype=tf.float32),  # empty thermo
         }
 
         outputs = model(inputs)
@@ -236,16 +243,18 @@ class TestModelCellsEncapsulateFlyability:
         nb_altitudes = 1  # Changed from 5
         other_dim = 45
         humidity_dim = 2
+        thermo_dim = 0  # baseline model
 
         # Create simple flyability block that matches FlyabilityBlock interface
-        # It expects a list of 3 inputs: wind, other, rain
+        # It expects a list of 4 inputs: wind, other, rain, thermo
         input_wind = tf.keras.layers.Input(shape=(3,), name="test_wind")
         input_other = tf.keras.layers.Input(shape=(3 * other_dim,), name="test_other")
         input_rain = tf.keras.layers.Input(shape=(3 * humidity_dim,), name="test_rain")
-        merged = tf.keras.layers.Concatenate()([input_wind, input_other, input_rain])
+        input_thermo = tf.keras.layers.Input(shape=(3 * thermo_dim,), name="test_thermo")  # empty for baseline
+        merged = tf.keras.layers.Concatenate()([input_wind, input_other, input_rain, input_thermo])
         dense1 = tf.keras.layers.Dense(16, activation="tanh")(merged)
         output = tf.keras.layers.Dense(1, activation="sigmoid")(dense1)
-        flyability_block = tf.keras.Model([input_wind, input_other, input_rain], output)
+        flyability_block = tf.keras.Model([input_wind, input_other, input_rain, input_thermo], output)
 
         batch_size = 4
 
@@ -253,15 +262,17 @@ class TestModelCellsEncapsulateFlyability:
         wind = tf.constant(np.random.randn(batch_size, nb_cells, nb_altitudes, 3), dtype=tf.float32)
         other = tf.constant(np.random.randn(batch_size, nb_cells, 3, other_dim), dtype=tf.float32)
         rain = tf.constant(np.random.randn(batch_size, nb_cells, 3, humidity_dim), dtype=tf.float32)
+        thermo = tf.constant(np.random.randn(batch_size, nb_cells, 3, thermo_dim), dtype=tf.float32)  # empty for baseline
 
-        # Call encapsulate_flyability
+        # Call encapsulate_flyability with 4 inputs (including thermo)
         output = ModelCells._encapsulate_flyability(
             flyability_block,
             nb_cells,
             nb_altitudes,
             other_dim,
             humidity_dim,
-            [wind, other, rain],
+            [wind, other, rain, thermo],  # inputs list comes before input_dim_thermo
+            thermo_dim,
         )
 
         # Check output shape: (batch, nb_cells, 1) after altitude binning removal

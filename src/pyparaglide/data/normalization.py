@@ -16,13 +16,34 @@ class Normalization:
     other_std: np.ndarray
     humidity_mean: np.ndarray
     humidity_std: np.ndarray
+    thermo_mean: np.ndarray | None = None  # NEW: thermodynamic parameters
+    thermo_std: np.ndarray | None = None   # NEW
 
-    def save(self, path: Path | str) -> None:
+    def save(self, path: Path | str, suffix: str = "") -> None:
         """Save normalization coefficients to file."""
         import pickle
 
-        with open(path, "wb") as f:
-            pickle.dump([self.other_mean, self.other_std, self.humidity_mean, self.humidity_std], f)
+        # Build data list based on what's available
+        if self.thermo_mean is not None:
+            data = [
+                self.other_mean, self.other_std,
+                self.humidity_mean, self.humidity_std,
+                self.thermo_mean, self.thermo_std,
+            ]
+        else:
+            data = [
+                self.other_mean, self.other_std,
+                self.humidity_mean, self.humidity_std,
+            ]
+
+        # Add suffix if provided
+        save_path = Path(path)
+        if suffix:
+            stem = save_path.stem.split("_normalization_cells")[0]
+            save_path = save_path.parent / f"normalization_cells_{suffix}{save_path.suffix}"
+
+        with open(save_path, "wb") as f:
+            pickle.dump(data, f)
 
     @staticmethod
     def load(path: Path | str) -> "Normalization":
@@ -31,7 +52,21 @@ class Normalization:
 
         with open(path, "rb") as f:
             data = pickle.load(f)
-        return Normalization(other_mean=data[0], other_std=data[1], humidity_mean=data[2], humidity_std=data[3])
+
+        # Handle both old (4 elements) and new (6 elements) formats
+        if len(data) == 6:
+            return Normalization(
+                other_mean=data[0], other_std=data[1],
+                humidity_mean=data[2], humidity_std=data[3],
+                thermo_mean=data[4], thermo_std=data[5],
+            )
+        else:
+            # Legacy format without thermo
+            return Normalization(
+                other_mean=data[0], other_std=data[1],
+                humidity_mean=data[2], humidity_std=data[3],
+                thermo_mean=None, thermo_std=None,
+            )
 
 
 def compute_normalization_coeffs(data: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

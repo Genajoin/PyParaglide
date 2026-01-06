@@ -75,6 +75,15 @@ class Dataset:
         ("Cloud water", [0]),
     ]
 
+    # Thermodynamic parameters (surface/entire atmosphere)
+    # Note: PBLH is NOT available in GFS analysis data, using 4 thermo params instead of 5
+    _DEFS_THERMO = [
+        ("Total Cloud Cover", [0]),                   # TCDC - entire atmosphere
+        ("Convective available potential energy", [0]), # CAPE - surface
+        ("Surface lifted index", [0]),                # LI - surface
+        ("Convective inhibition", [0]),               # CIN - surface
+    ]
+
     def __init__(self, data_dir: Path | str):
         """
         Initialize dataset.
@@ -104,6 +113,7 @@ class Dataset:
         self.params_other = [[], [], []]
         self.params_wind = [[], [], []]
         self.params_humidity = [[], [], []]
+        self.params_thermo = [[], [], []]  # NEW: thermodynamic parameters
 
         for h_idx, hour in enumerate(hours):
             # OTHER
@@ -132,6 +142,31 @@ class Dataset:
                         self.params_humidity[h_idx].append(found)
                     else:
                          print(f"Warning: Missing param {name} {level} at {hour}h")
+
+            # THERMO (NEW)
+            for name, levels in self._DEFS_THERMO:
+                for level in levels:
+                    found = self._find_param(hour, name, level)
+                    if found:
+                        self.params_thermo[h_idx].append(found)
+                    else:
+                        print(f"Warning: Missing thermo param {name} {level} at {hour}h")
+
+        # NEW: Validate thermo parameters availability
+        thermo_count = sum(len(params) for params in self.params_thermo)
+        if thermo_count == 0:
+            import sys
+            print("\n" + "=" * 70)
+            print("ERROR: Thermodynamic parameters not found in dataset!")
+            print("=" * 70)
+            print("\nThe current dataset was built before thermo parameters were added.")
+            print("To use --thermo flag, you must rebuild the dataset with the new parameters:\n")
+            print("  1. Rebuild dataset:")
+            print("     pyparaglide build-dataset --rebuild-cache")
+            print("\n  2. Or train without thermo (baseline model):")
+            print("     pyparaglide train --epochs 55")
+            print("\n" + "=" * 70)
+            sys.exit(1)
 
     def _find_param(self, hour: int, name: str, level: int) -> tuple | None:
         """Find a parameter tuple in meteo_params."""
@@ -190,8 +225,25 @@ class Dataset:
             Array of shape (len(cells)*nb_days, len(params))
         """
         lines = self.get_lines(cells)
-        param_indices = [self.meteo_params.index(p) for p in params]
+        param_indices = [i for i, p in enumerate(self.meteo_params) if p in params]
         return self.meteo_content[lines][:, param_indices]
+
+    def get_thermo_matrix(self, cells: list[int]) -> np.ndarray:
+        """
+        Get thermo data for specific cells.
+
+        Returns array of shape (len(cells)*nb_days, 15) for 5 params × 3 hours.
+
+        Args:
+            cells: List of cell indices
+
+        Returns:
+            Array of shape (len(cells)*nb_days, 5*3=15)
+        """
+        all_params = []
+        for h_idx in range(3):
+            all_params.extend(self.params_thermo[h_idx])
+        return self.get_meteo_matrix(cells, all_params)
 
     def get_dow(self) -> np.ndarray:
         """Get day-of-week one-hot encoding."""
