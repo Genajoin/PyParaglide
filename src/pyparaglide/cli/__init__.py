@@ -1528,11 +1528,49 @@ def experiments(
                 t_table.add_column("Metric", style="dim")
                 t_table.add_column("Value")
 
+                # Separate confusion matrix from other metrics
+                confusion_matrix = None
                 for key, value in metrics["test_metrics"].items():
-                    if value is not None:
-                        t_table.add_row(key, f"{value:.4f}" if isinstance(value, float) else str(value))
+                    if key == "confusion_matrix" and isinstance(value, dict):
+                        confusion_matrix = value
+                    elif value is not None:
+                        if isinstance(value, float):
+                            t_table.add_row(key, f"{value:.4f}")
+                        else:
+                            t_table.add_row(key, str(value))
 
                 console.print(t_table)
+
+                # Show confusion matrix as separate table
+                if confusion_matrix:
+                    console.print("\n[bold]Confusion Matrix:[/bold]")
+                    cm_table = Table(show_header=True, header_style="bold magenta")
+                    cm_table.add_column("", style="dim")
+                    cm_table.add_column("Count", style="cyan")
+                    cm_table.add_column("Meaning", style="dim")
+
+                    cm_table.add_row(
+                        "True Negatives",
+                        f"[green]{confusion_matrix.get('true_negatives', 0):,}[/green]",
+                        "Correctly predicted NOT flyable",
+                    )
+                    cm_table.add_row(
+                        "False Positives",
+                        f"[red]{confusion_matrix.get('false_positives', 0):,}[/red]",
+                        "Predicted flyable, but wasn't (Wasted trip)",
+                    )
+                    cm_table.add_row(
+                        "False Negatives",
+                        f"[yellow]{confusion_matrix.get('false_negatives', 0):,}[/yellow]",
+                        "Predicted NOT flyable, but was (Missed day)",
+                    )
+                    cm_table.add_row(
+                        "True Positives",
+                        f"[green]{confusion_matrix.get('true_positives', 0):,}[/green]",
+                        "Correctly predicted flyable",
+                    )
+
+                    console.print(cm_table)
 
             # Show config
             if "config" in metrics and metrics["config"]:
