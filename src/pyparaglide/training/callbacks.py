@@ -121,10 +121,18 @@ class LearningRateScheduler:
     Learning rate scheduler with exponential decay.
 
     Creates a Keras callback that adjusts learning rate during training.
+
+    Experiment v1: Added cosine annealing option.
     """
 
     @staticmethod
-    def create(lr_init: float = 0.01, lr_end: float = 1e-6, nb_epochs: int = 100) -> tf.keras.callbacks.LearningRateScheduler:
+    def create(
+        lr_init: float = 0.01,
+        lr_end: float = 1e-6,
+        nb_epochs: int = 100,
+        schedule_type: str = "exponential",
+        warmup_epochs: int = 0,
+    ) -> tf.keras.callbacks.LearningRateScheduler:
         """
         Create learning rate scheduler callback.
 
@@ -132,14 +140,43 @@ class LearningRateScheduler:
             lr_init: Initial learning rate
             lr_end: Final learning rate
             nb_epochs: Total number of epochs
+            schedule_type: "exponential" (default) or "cosine"
+            warmup_epochs: Number of warmup epochs (0 = no warmup)
 
         Returns:
             Keras callback for learning rate scheduling
         """
+        if warmup_epochs > 0:
+            # EXPERIMENT v3: Warmup + main schedule
+            def schedule_with_warmup(epoch: int) -> float:
+                if epoch < warmup_epochs:
+                    # Linear warmup from lr_init/10 to lr_init
+                    return lr_init / 10 + (lr_init - lr_init / 10) * epoch / warmup_epochs
+                elif schedule_type == "cosine":
+                    # Cosine annealing after warmup
+                    progress = (epoch - warmup_epochs) / max(nb_epochs - warmup_epochs - 1, 1)
+                    return lr_end + 0.5 * (lr_init - lr_end) * (1 + math.cos(math.pi * progress))
+                else:
+                    # Exponential decay after warmup
+                    s = (math.log(lr_init) - math.log(lr_end)) / math.log(10.0)
+                    return lr_init * pow(10.0, -float(epoch - warmup_epochs) / float(max(nb_epochs - warmup_epochs - 1, 1)) * s)
 
-        def schedule(epoch: int) -> float:
-            s = (math.log(lr_init) - math.log(lr_end)) / math.log(10.0)
-            lr = lr_init * pow(10.0, -float(epoch) / float(max(nb_epochs - 1, 1)) * s)
-            return lr
+            return tf.keras.callbacks.LearningRateScheduler(schedule_with_warmup)
+        elif schedule_type == "cosine":
+            # EXPERIMENT: Cosine annealing (often converges better than exponential)
+            def schedule_cosine(epoch: int) -> float:
+                # Cosine annealing: lr = lr_min + 0.5 * (lr_max - lr_min) * (1 + cos(pi * epoch / T))
+                # Where T = nb_epochs
+                progress = epoch / max(nb_epochs - 1, 1)
+                lr = lr_end + 0.5 * (lr_init - lr_end) * (1 + math.cos(math.pi * progress))
+                return lr
 
-        return tf.keras.callbacks.LearningRateScheduler(schedule)
+            return tf.keras.callbacks.LearningRateScheduler(schedule_cosine)
+        else:
+            # Original exponential decay
+            def schedule_exponential(epoch: int) -> float:
+                s = (math.log(lr_init) - math.log(lr_end)) / math.log(10.0)
+                lr = lr_init * pow(10.0, -float(epoch) / float(max(nb_epochs - 1, 1)) * s)
+                return lr
+
+            return tf.keras.callbacks.LearningRateScheduler(schedule_exponential)

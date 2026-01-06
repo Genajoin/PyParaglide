@@ -355,7 +355,7 @@ class Trainer:
         # Prepare callbacks
         log_file = self.models_dir / "cells.log"
         callbacks = [
-            LearningRateScheduler.create(lr_init=lr_init, lr_end=lr_end, nb_epochs=nb_epochs),
+            LearningRateScheduler.create(lr_init=lr_init, lr_end=lr_end, nb_epochs=nb_epochs, schedule_type="cosine", warmup_epochs=0),  # EXPERIMENT v4: cosine without warmup
             TrainingLogger(ModelType.CELLS, log_file),
         ]
 
