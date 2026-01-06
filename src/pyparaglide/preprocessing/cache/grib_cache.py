@@ -299,3 +299,185 @@ class GribCache:
         manifest['last_updated'] = datetime.utcnow().isoformat() + 'Z'
         with open(self.manifest_path, 'w') as f:
             json.dump(manifest, f, indent=2)
+
+    # ===== Per-Cell Cache Methods =====
+
+    def get_cell_cache_path(self, grib_path: Path, cell_lat: float, cell_lon: float) -> Path:
+        """
+        Get per-cell cache file path.
+
+        Format: cells/{lat}_{lon}/YYYY/MM/file.npz
+        Example: cells/45_13/2024/06/gfsanl_3_20240601_0600_000.npz
+
+        Args:
+            grib_path: Path to source GRIB file (can be full path or just filename)
+            cell_lat: Cell latitude center (e.g., 45.0)
+            cell_lon: Cell longitude center (e.g., 13.0)
+
+        Returns:
+            Path to per-cell cache file (relative to cache_dir)
+        """
+        # Use integer degrees for cell identity (unambiguous grid identifier)
+        cell_dir = f"{int(cell_lat)}_{int(cell_lon)}"
+        base_path = self.get_cache_path(grib_path)
+        return Path("cells") / cell_dir / base_path
+
+    def _get_full_cell_cache_path(self, grib_path: Path, cell_lat: float, cell_lon: float) -> Path:
+        """Get full path to per-cell cache file."""
+        return self.cache_dir / self.get_cell_cache_path(grib_path, cell_lat, cell_lon)
+
+    def save_cell(
+        self,
+        grib_path: Path,
+        cell_lat: float,
+        cell_lon: float,
+        values: np.ndarray,
+    ) -> None:
+        """
+        Save extracted values for a single cell to cache.
+
+        Args:
+            grib_path: Path to source GRIB file (can be str or Path)
+            cell_lat: Cell latitude center
+            cell_lon: Cell longitude center
+            values: Extracted parameter values array of shape (1, 69)
+        """
+        grib_path = Path(grib_path)
+        cache_path = self._get_full_cell_cache_path(grib_path, cell_lat, cell_lon)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+
+        metadata = {
+            'values': values,
+            'cell_lat': float(cell_lat),
+            'cell_lon': float(cell_lon),
+            'extraction_time': datetime.utcnow().isoformat() + 'Z',
+        }
+
+        np.savez_compressed(cache_path, **metadata)
+
+    def load_cell(self, grib_path: Path, cell_lat: float, cell_lon: float) -> np.ndarray:
+        """
+        Load cached values for a single cell.
+
+        Args:
+            grib_path: Path to source GRIB file (can be str or Path)
+            cell_lat: Cell latitude center
+            cell_lon: Cell longitude center
+
+        Returns:
+            Cached values array of shape (1, 69)
+
+        Raises:
+            FileNotFoundError: If per-cell cache file doesn't exist
+            ValueError: If cache file is corrupted
+        """
+        grib_path = Path(grib_path)
+        cache_path = self._get_full_cell_cache_path(grib_path, cell_lat, cell_lon)
+
+        if not cache_path.exists():
+            raise FileNotFoundError(f"Cell cache not found for ({cell_lat}, {cell_lon}) in {grib_path}")
+
+        try:
+            cache_data = np.load(cache_path)
+            values = cache_data['values']
+            return values
+        except Exception as e:
+            raise ValueError(f"Failed to load cell cache for ({cell_lat}, {cell_lon}): {e}")
+
+    def has_cell_cache(self, grib_path: Path, cells_latlon: list) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+        """
+        Check which cells have per-cell cache available.
+
+        Args:
+            grib_path: Path to source GRIB file
+            cells_latlon: List of (lat, lon) cell coordinates
+
+        Returns:
+            Tuple of (cached_cells, missing_cells) where each is a list of (lat, lon) tuples
+        """
+        cached = []
+        missing = []
+
+        for cell_lat, cell_lon in cells_latlon:
+            cache_path = self._get_full_cell_cache_path(grib_path, cell_lat, cell_lon)
+            if cache_path.exists():
+                cached.append((cell_lat, cell_lon))
+            else:
+                missing.append((cell_lat, cell_lon))
+
+        return cached, missing
+
+    def load_cells_batch(
+        self,
+        grib_path: Path,
+        cells_latlon: list,
+        flatten: bool = True,
+    ) -> np.ndarray:
+        """
+        Load cached values for multiple cells.
+
+        Only loads cells that have per-cell cache. Use has_cell_cache() first
+        to check which cells are available.
+
+        Args:
+            grib_path: Path to source GRIB file
+            cells_latlon: List of (lat, lon) cell coordinates to load
+            flatten: If True, return flat array, else (nb_cells, 69)
+
+        Returns:
+            Cached values array - flat if flatten=True, else (nb_loaded_cells, 69)
+
+        Raises:
+            FileNotFoundError: If none of the requested cells have cache
+        """
+        grib_path = Path(grib_path)
+        loaded_values = []
+
+        for cell_lat, cell_lon in cells_latlon:
+            try:
+                cell_values = self.load_cell(grib_path, cell_lat, cell_lon)
+                loaded_values.append(cell_values)
+            except FileNotFoundError:
+                # Skip cells without per-cell cache
+                continue
+
+        if not loaded_values:
+            raise FileNotFoundError(f"No per-cell cache found for any requested cells in {grib_path}")
+
+        # Stack all loaded cells
+        all_values = np.vstack(loaded_values)
+
+        if flatten:
+            return all_values.flatten()
+        return all_values
+
+    def is_valid_cell(self, grib_path: Path, cell_lat: float, cell_lon: float) -> bool:
+        """
+        Check if per-cell cache is valid for a specific cell.
+
+        Per-cell cache doesn't depend on bbox, so we only check file existence.
+
+        Args:
+            grib_path: Path to source GRIB file
+            cell_lat: Cell latitude center
+            cell_lon: Cell longitude center
+
+        Returns:
+            True if per-cell cache exists and is valid
+        """
+        grib_path = Path(grib_path)
+        cache_path = self._get_full_cell_cache_path(grib_path, cell_lat, cell_lon)
+
+        if not cache_path.exists():
+            return False
+
+        # Validate file can be loaded
+        try:
+            cache_data = np.load(cache_path)
+            # Basic validation: check shape is (1, 69)
+            values = cache_data['values']
+            if values.shape != (1, 69):
+                return False
+            return True
+        except Exception:
+            return False

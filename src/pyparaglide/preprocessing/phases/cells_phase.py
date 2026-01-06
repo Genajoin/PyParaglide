@@ -110,12 +110,12 @@ class BuildCellsPhase:
 
         try:
             grb_reader = GribReader(sample_grib)
-            _, lats, lons = grb_reader.getInfos()
+            _, lats, lons = grb_reader.get_infos()
 
             cells_grib = []
             for lat, lon in cells_latlon:
-                row = GribReader.findClosest(lat, lats, 0)
-                col = GribReader.findClosest(lon, lons, 1)
+                row = GribReader.find_closest(lat, lats, 0)
+                col = GribReader.find_closest(lon, lons, 1)
                 cells_grib.append((int(row), int(col)))
 
             return cells_grib

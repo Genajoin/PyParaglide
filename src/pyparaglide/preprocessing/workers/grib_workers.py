@@ -196,12 +196,19 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir
                     try:
                         # Reshape flat values to (nb_cells, 69) for cache
                         cached_values = np.array(values, dtype=np.float32).reshape(len(cells_latlon), len(grib_params))
+
+                        # Legacy: Save all cells in one file (for backward compatibility)
                         cache.save(
                             grib_path,
                             cached_values,
                             config={'bbox': None, 'nb_cells': len(cells_latlon), 'cells_latlon': cells_latlon},
                             params=grib_params,
                         )
+
+                        # NEW: Save each cell individually (for bbox-independent caching)
+                        for cell_idx, (cell_lat, cell_lon) in enumerate(cells_latlon):
+                            cell_values = cached_values[cell_idx:cell_idx+1, :]  # Shape (1, 69)
+                            cache.save_cell(grib_path, cell_lat, cell_lon, cell_values)
                     except Exception as cache_err:
                         # Don't fail if cache save fails
                         print(f"[WARNING] Failed to cache {day_date} {hour}:00: {cache_err}")
