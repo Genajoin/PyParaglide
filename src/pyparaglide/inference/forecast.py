@@ -30,7 +30,6 @@ class Forecaster:
         self,
         models_dir: Path | str,
         problem_formulation: ProblemFormulation = ProblemFormulation.CLASSIFICATION,
-        model_variant: str = "",  # NEW: "" for default, or "baseline", "thermo", etc.
     ):
         """
         Initialize forecaster.
@@ -38,11 +37,9 @@ class Forecaster:
         Args:
             models_dir: Directory containing trained model weights
             problem_formulation: CLASSIFICATION or REGRESSION
-            model_variant: Model variant for A/B testing (e.g., "baseline", "thermo")
         """
         self.models_dir = Path(models_dir)
         self.problem_formulation = problem_formulation
-        self.model_variant = model_variant  # NEW
 
         # Model parameters
         self.wind_dim = 8
@@ -63,9 +60,8 @@ class Forecaster:
         Returns:
             Number of cells detected from weights
         """
-        # Use variant-specific weight file
-        suffix = f"_{self.model_variant}" if self.model_variant else ""
-        weight_path = self.models_dir / f"cells{suffix}.weights.h5"
+        # Always use default cells.weights.h5 (no suffix)
+        weight_path = self.models_dir / "cells.weights.h5"
 
         import h5py
 
@@ -96,9 +92,8 @@ class Forecaster:
 
     def load_model(self) -> None:
         """Load trained CELLS model and normalization coefficients."""
-        # Use variant-specific file paths
-        suffix = f"_{self.model_variant}" if self.model_variant else ""
-        norm_path = self.models_dir / f"normalization_cells{suffix}.pkl"
+        # Always use default files (no suffix)
+        norm_path = self.models_dir / "normalization_cells.pkl"
 
         if norm_path.exists():
             self.normalization = Normalization.load(norm_path)
@@ -108,7 +103,7 @@ class Forecaster:
         # Detect nb_cells from weights file before creating model
         self.nb_cells = self._detect_nb_cells_from_weights()
 
-        # Detect thermo_dim from normalization (NEW)
+        # Detect thermo_dim from normalization (auto-detected)
         thermo_dim = 4 if self.normalization.thermo_mean is not None else 0
 
         # Create and load CELLS model
@@ -119,12 +114,12 @@ class Forecaster:
             other_dim=self.normalization.other_mean.shape[0],
             humidity_dim=self.normalization.humidity_mean.shape[0],
             nb_altitudes=self.nb_altitudes,
-            thermo_dim=thermo_dim,  # NEW
+            thermo_dim=thermo_dim,
             super_resolution=1,
         )
 
-        # Load weights
-        weight_path = self.models_dir / f"cells{suffix}.weights.h5"
+        # Load weights (no suffix)
+        weight_path = self.models_dir / "cells.weights.h5"
         if weight_path.exists():
             self.model.load_weights(weight_path)
             print(f"[INFO] Loaded model from {weight_path}")

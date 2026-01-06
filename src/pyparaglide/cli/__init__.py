@@ -608,8 +608,6 @@ def train(
     super_resolution: int = typer.Option(1, "--super-res", "-s", help="Super-resolution factor"),
     load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights"),
     early_stopping_patience: int = typer.Option(0, "--early-stopping-patience", "-p", help="Early stopping patience (0 = disabled, requires --validation)"),
-    thermo: bool = typer.Option(False, "--thermo", help="Enable thermodynamic parameters (PBLH, TCDC, CAPE, LI, CIN)"),
-    suffix: str = typer.Option("", "--suffix", help="Model suffix for versioning (e.g., '_thermo', '_baseline')"),
     experiment_name: str = typer.Option(None, "--experiment", help="Save as experiment with this name"),
     experiment_notes: str = typer.Option(None, "--notes", help="Notes for the experiment"),
 ) -> None:
@@ -617,6 +615,7 @@ def train(
     Train PyParaglide CELLS model for grid-based flyability prediction.
 
     Trains all cells at once using the CELLS architecture.
+    Thermo parameters are automatically detected from the dataset.
 
     Example:
         pyparaglide train --epochs 55
@@ -661,8 +660,6 @@ def train(
         super_resolution=super_resolution,
         load_weights=load_weights,
         early_stopping_patience=early_stopping_patience,
-        thermo=thermo,
-        suffix=suffix,
         experiment_name=experiment_name,
         experiment_notes=experiment_notes,
     )
@@ -680,31 +677,30 @@ def _train_cells(
     super_resolution: int,
     load_weights: bool,
     early_stopping_patience: int,
-    thermo: bool = False,
-    suffix: str = "",
     experiment_name: str | None = None,
     experiment_notes: str | None = None,
 ) -> None:
     """Train CELLS model (all cells at once)."""
-    # Determine suffix if not provided
-    # Baseline: no suffix (cells.weights.h5), Thermo: _thermo suffix
-    if not suffix:
-        suffix = "_thermo" if thermo else ""
-
     console.print(f"[dim]Data directory: {data_dir}[/dim]")
     console.print(f"[dim]Models directory: {models_dir}[/dim]")
     console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
-    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]")
-    console.print(f"[dim]Thermo: {thermo}, Suffix: {suffix}[/dim]\n")
+    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
 
-    # Create trainer
+    # Create trainer - thermo_dim will be auto-detected from dataset
     trainer = Trainer(
         data_dir=data_dir,
         model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
-        thermo_dim=4 if thermo else 0,  # NEW: 4 thermo params (PBLH not available in GFS)
+        thermo_dim=None,  # Auto-detect from dataset
     )
+
+    # Show detected thermo parameters
+    thermo_dim = trainer.thermo_dim if hasattr(trainer, "thermo_dim") else 0
+    if thermo_dim > 0:
+        console.print(f"[green]Thermo parameters detected: {thermo_dim}[/green]\n")
+    else:
+        console.print(f"[yellow]No thermo parameters found in dataset[/yellow]\n")
 
     # Prepare data (all cells)
     console.print("[yellow]Preparing data...[/yellow]")
@@ -728,9 +724,9 @@ def _train_cells(
         early_stopping_patience=early_stopping_patience,
     )
 
-    # Save
+    # Save (no suffix - single model format)
     console.print("\n[yellow]Saving model...[/yellow]")
-    trainer.save_weights(suffix=suffix)  # NEW: use suffix for versioning
+    trainer.save_weights(suffix="")  # Always use empty suffix now
 
     # Results
     final_loss = history["loss"][-1]
@@ -752,8 +748,7 @@ def _train_cells(
         # Build config dict
         config = {
             "model": "cells",
-            "suffix": suffix,
-            "thermo": thermo,
+            "thermo_dim": thermo_dim,
             "super_resolution": super_resolution,
             "learning_rate_init": lr_init,
             "learning_rate_end": lr_end,
@@ -764,8 +759,8 @@ def _train_cells(
             "early_stopping_patience": early_stopping_patience,
         }
 
-        # Get weights path
-        weights_path = Path(models_dir) / f"cells{suffix}.weights.h5"
+        # Get weights path (no suffix)
+        weights_path = Path(models_dir) / "cells.weights.h5"
 
         # Calculate training time from history
         epochs_trained = len(history["loss"])
@@ -793,8 +788,6 @@ def evaluate(
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
     threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
     output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC)"),
-    thermo: bool = typer.Option(False, "--thermo", help="Model uses thermodynamic parameters"),
-    suffix: str = typer.Option("", "--suffix", "-s", help="Model suffix for versioning (e.g., '_thermo', '_baseline')"),
 ) -> None:
     """
     Evaluate trained model performance on a specific test year.
@@ -808,8 +801,10 @@ def evaluate(
     - flown: Basic flyability (default)
     - crossed: XC cross-country potential
 
+    Thermo parameters are automatically detected from the dataset.
+
     Example:
-        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed --thermo --suffix _thermo
+        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed
     """
     import numpy as np
     from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
@@ -823,24 +818,24 @@ def evaluate(
     if models_dir is None:
         models_dir = settings.models_dir
 
-    # Determine suffix if not provided
-    if not suffix:
-        suffix = "_thermo" if thermo else ""
-
     console.print(f"[bold cyan]Evaluating CELLS model on year {year}[/bold cyan]")
     console.print(f"[dim]Data: {data_dir}[/dim]")
     console.print(f"[dim]Models: {models_dir}[/dim]")
-    console.print(f"[dim]Threshold: {threshold}[/dim]")
-    console.print(f"[dim]Thermo: {thermo}, Suffix: {suffix}[/dim]\n")
+    console.print(f"[dim]Threshold: {threshold}[/dim]\n")
 
-    # Initialize Trainer
+    # Initialize Trainer - thermo_dim auto-detected from dataset
     trainer = Trainer(
         data_dir=data_dir,
         model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
-        thermo_dim=4 if thermo else 0,
+        thermo_dim=None,  # Auto-detect from dataset
     )
+
+    # Show detected thermo parameters
+    thermo_dim = trainer.thermo_dim if hasattr(trainer, "thermo_dim") else 0
+    if thermo_dim > 0:
+        console.print(f"[dim]Thermo parameters: {thermo_dim}[/dim]\n")
 
     # Find indices for the test year
     # dataset.meteo_days contains all available days
@@ -901,7 +896,7 @@ def evaluate(
 
     # Load Model & Predict
     console.print("[yellow]Loading model and predicting...[/yellow]")
-    trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix=suffix)
+    trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix="")  # No suffix - single model format
 
     preds = trainer.model.predict(X_test, verbose=1)
 
