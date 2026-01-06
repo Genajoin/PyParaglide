@@ -289,6 +289,252 @@ pyparaglide train --epochs 600 -p 30          # Train CELLS
 pyparaglide evaluate --year 2023              # Evaluate
 ```
 
+## Experiment Workflow
+
+This section describes the recommended workflow for developing model improvements through experiments.
+
+### Overview
+
+The experiment workflow combines:
+- **Git branches** — Isolate changes per experiment
+- **Experiments tracking** — Save metrics and configurations
+- **A/B comparison** — Compare against baseline
+
+### Workflow Steps
+
+#### 1. Establish Baseline
+
+Before starting experiments, establish a baseline:
+
+```bash
+# Train baseline model
+source .venv/bin/activate && pyparaglide train \
+  --epochs 100 \
+  --experiment baseline_v1 \
+  --notes "Baseline CELLS model with default config"
+
+# Verify baseline
+source .venv/bin/activate && pyparaglide experiments --show baseline_v1
+```
+
+#### 2. Create Experiment Branch
+
+Create a new branch for each experiment:
+
+```bash
+# Name convention: feat/exp-, exp-, impro-
+git checkout -b feat/exp-add-attention-layer
+# or
+git checkout -b exp/learning-rate-schedule
+```
+
+#### 3. Make Changes
+
+Implement your improvement:
+- Modify model architecture (`src/pyparaglide/models/`)
+- Change training parameters (`src/pyparaglide/training/`)
+- Add new features or preprocessing
+
+#### 4. Train Experiment
+
+Train with experiment tracking:
+
+```bash
+source .venv/bin/activate && pyparaglide train \
+  --epochs 100 \
+  --experiment attention_v1 \
+  --notes "Added self-attention layer after FlyabilityBlock"
+```
+
+This saves:
+- Weights to `data/models/experiments/attention_v1/cells.weights.h5`
+- Metrics to `data/models/experiments/attention_v1/metrics.json`
+- Config to `data/models/experiments/attention_v1/config.json`
+- Git branch and commit are automatically recorded
+
+#### 5. Evaluate Experiment
+
+```bash
+# Run evaluation on test set
+source .venv/bin/activate && pyparaglide evaluate \
+  --year 2023 \
+  --model-path data/models/experiments/attention_v1/cells.weights.h5
+```
+
+#### 6. Compare with Baseline
+
+```bash
+# Compare experiments
+source .venv/bin/activate && pyparaglide experiments --compare baseline_v1,attention_v1
+
+# Or list all experiments
+source .venv/bin/activate && pyparaglide experiments --list
+```
+
+Output shows:
+```
+baseline_v1 vs attention_v1
+┌──────────────┬──────────┬────────────┬──────────┬─────────┐
+│ Metric       │ Baseline │ Experiment │ Delta    │ Status  │
+├──────────────┼──────────┼────────────┼──────────┼─────────┤
+│ roc_auc      │ 0.8234   │ 0.8456     │ ↑0.0222  │ Better  │
+│ precision    │ 0.7123   │ 0.7234     │ ↑0.0111  │ Better  │
+│ recall       │ 0.7456   │ 0.7567     │ ↑0.0111  │ Better  │
+│ f1           │ 0.7286   │ 0.7398     │ ↑0.0112  │ Better  │
+│ val_loss     │ 0.3234   │ 0.3123     │ ↓0.0111  │ Better  │
+└──────────────┴──────────┴────────────┴──────────┴─────────┘
+
+Winner: EXPERIMENT
+```
+
+#### 7a. Successful Experiment → Merge
+
+If experiment shows improvement:
+
+```bash
+# Rebase to keep clean history
+git checkout master
+git pull
+git checkout feat/exp-add-attention-layer
+git rebase master
+
+# Merge with --no-ff to preserve experiment history
+git checkout master
+git merge --no-ff feat/exp-add-attention-layer
+
+# Optional: Tag the merge
+git tag -a exp/attention-v1-merged -m "Merged attention layer experiment"
+
+# Push
+git push origin master
+git push origin exp/attention-v1-merged
+
+# Delete feature branch
+git branch -d feat/exp-add-attention-layer
+```
+
+#### 7b. Failed Experiment → Archive
+
+If experiment shows no improvement or regression:
+
+```bash
+# Save the experiment data for reference
+# (already saved in data/models/experiments/)
+
+# Switch back to master
+git checkout master
+
+# Delete experiment branch
+git branch -d feat/exp-add-attention-layer
+
+# Document findings (optional)
+# Add to EXPERIMENTS.md or create experiment notes
+```
+
+### Best Practices
+
+#### Naming Conventions
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| Git branch | `feat/exp-*`, `exp/*`, `impro/*` | `feat/exp-attention-layer` |
+| Experiment name | Descriptive with version | `attention_v1`, `lr_schedule_v2` |
+| Notes | Concise description | "Added attention layer" |
+
+#### Metrics for Comparison
+
+Primary metrics for deciding success:
+- **ROC AUC** — Overall ranking quality (most important)
+- **Val Loss** — Generalization gap
+- **F1 Score** — Balance of precision/recall
+
+Minimum improvement thresholds:
+- ROC AUC: +0.01 (1%)
+- Val Loss: -0.02
+- F1: +0.01
+
+#### Multiple Iterations
+
+For iterative experiments:
+
+```bash
+# v1
+git checkout -b feat/exp-attention-v1
+pyparaglide train --experiment attention_v1
+
+# Iterate (still in same branch)
+# Modify code...
+pyparaglide train --experiment attention_v2
+
+# If v2 successful
+git commit -am "v2: improved attention mechanism"
+
+# Only merge the final version
+git checkout master && git merge --no-ff feat/exp-attention-v1
+```
+
+#### Documentation
+
+Keep experiment notes:
+
+```bash
+# Save with detailed notes
+pyparaglide train \
+  --experiment attention_v1 \
+  --notes "Added self-attention (4 heads). Key changes: attention position after FlyabilityBlock, dropout 0.1."
+
+# View notes later
+pyparaglide experiments --show attention_v1
+```
+
+### Experiment Directory Structure
+
+```
+data/models/experiments/
+├── baseline_v1/
+│   ├── cells.weights.h5
+│   ├── metrics.json        # All metrics + git info
+│   └── config.json         # Model config only
+├── attention_v1/
+│   ├── cells.weights.h5
+│   ├── metrics.json
+│   └── config.json
+└── lr_schedule_v2/
+    ├── cells.weights.h5
+    ├── metrics.json
+    └── config.json
+```
+
+### Common Experiment Patterns
+
+#### 1. Architecture Changes
+
+```bash
+git checkout -b feat/exp-add-residual-connections
+# Edit model architecture
+pyparaglide train --experiment residual_v1 --epochs 150
+pyparaglide experiments --compare baseline_v1,residual_v1
+```
+
+#### 2. Hyperparameter Tuning
+
+```bash
+git checkout -b exp/learning-rate-tuning
+# Modify learning rate in code or via config
+pyparaglide train --experiment lr_high_v1 --epochs 100 --lr-init 0.02
+pyparaglide train --experiment lr_low_v1 --epochs 100 --lr-init 0.002
+pyparaglide experiments --compare baseline_v1,lr_high_v1
+```
+
+#### 3. Data Augmentation
+
+```bash
+git checkout -b feat/exp-data-augmentation
+# Add augmentation in DatasetBuilder
+pyparaglide train --experiment aug_v1 --epochs 100
+pyparaglide evaluate --year 2023 --model-path data/models/experiments/aug_v1/cells.weights.h5
+```
+
 ## See Also
 
 - [Architecture](ARCHITECTURE.md) — Model architecture details
