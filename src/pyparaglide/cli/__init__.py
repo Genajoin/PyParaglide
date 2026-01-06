@@ -608,16 +608,18 @@ def train(
     super_resolution: int = typer.Option(1, "--super-res", "-s", help="Super-resolution factor"),
     load_weights: bool = typer.Option(False, "--load-weights", help="Load existing weights"),
     early_stopping_patience: int = typer.Option(0, "--early-stopping-patience", "-p", help="Early stopping patience (0 = disabled, requires --validation)"),
-    thermo: bool = typer.Option(False, "--thermo", help="Enable thermodynamic parameters (PBLH, TCDC, CAPE, LI, CIN)"),
-    suffix: str = typer.Option("", "--suffix", help="Model suffix for versioning (e.g., '_thermo', '_baseline')"),
+    experiment_name: str = typer.Option(None, "--experiment", help="Save as experiment with this name"),
+    experiment_notes: str = typer.Option(None, "--notes", help="Notes for the experiment"),
 ) -> None:
     """
     Train PyParaglide CELLS model for grid-based flyability prediction.
 
     Trains all cells at once using the CELLS architecture.
+    Thermo parameters are automatically detected from the dataset.
 
     Example:
         pyparaglide train --epochs 55
+        pyparaglide train --epochs 55 --experiment baseline_v1
     """
     from pyparaglide.preprocessing.dataset_utils import ensure_dataset_exists
 
@@ -658,8 +660,8 @@ def train(
         super_resolution=super_resolution,
         load_weights=load_weights,
         early_stopping_patience=early_stopping_patience,
-        thermo=thermo,
-        suffix=suffix,
+        experiment_name=experiment_name,
+        experiment_notes=experiment_notes,
     )
 
 
@@ -675,29 +677,30 @@ def _train_cells(
     super_resolution: int,
     load_weights: bool,
     early_stopping_patience: int,
-    thermo: bool = False,
-    suffix: str = "",
+    experiment_name: str | None = None,
+    experiment_notes: str | None = None,
 ) -> None:
     """Train CELLS model (all cells at once)."""
-    # Determine suffix if not provided
-    # Baseline: no suffix (cells.weights.h5), Thermo: _thermo suffix
-    if not suffix:
-        suffix = "_thermo" if thermo else ""
-
     console.print(f"[dim]Data directory: {data_dir}[/dim]")
     console.print(f"[dim]Models directory: {models_dir}[/dim]")
     console.print(f"[dim]Epochs: {epochs}, Batch size: {batch_size}[/dim]")
-    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]")
-    console.print(f"[dim]Thermo: {thermo}, Suffix: {suffix}[/dim]\n")
+    console.print(f"[dim]Learning rate: {lr_init} → {lr_end}[/dim]\n")
 
-    # Create trainer
+    # Create trainer - thermo_dim will be auto-detected from dataset
     trainer = Trainer(
         data_dir=data_dir,
         model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
-        thermo_dim=4 if thermo else 0,  # NEW: 4 thermo params (PBLH not available in GFS)
+        thermo_dim=None,  # Auto-detect from dataset
     )
+
+    # Show detected thermo parameters
+    thermo_dim = trainer.thermo_dim if hasattr(trainer, "thermo_dim") else 0
+    if thermo_dim > 0:
+        console.print(f"[green]Thermo parameters detected: {thermo_dim}[/green]\n")
+    else:
+        console.print(f"[yellow]No thermo parameters found in dataset[/yellow]\n")
 
     # Prepare data (all cells)
     console.print("[yellow]Preparing data...[/yellow]")
@@ -721,12 +724,13 @@ def _train_cells(
         early_stopping_patience=early_stopping_patience,
     )
 
-    # Save
+    # Save (no suffix - single model format)
     console.print("\n[yellow]Saving model...[/yellow]")
-    trainer.save_weights(suffix=suffix)  # NEW: use suffix for versioning
+    trainer.save_weights(suffix="")  # Always use empty suffix now
 
     # Results
     final_loss = history["loss"][-1]
+    final_val_loss = None
     if "val_loss" in history and history["val_loss"]:
         final_val_loss = history["val_loss"][-1]
         console.print(f"\n[green]Training complete![/green]")
@@ -735,16 +739,199 @@ def _train_cells(
         console.print(f"\n[green]Training complete![/green]")
         console.print(f"Final loss: [cyan]{final_loss:.4f}[/cyan]")
 
+    # Save experiment if requested
+    if experiment_name:
+        from pyparaglide.experiments import save_experiment_metrics
+
+        console.print(f"\n[yellow]Saving experiment: {experiment_name}[/yellow]")
+
+        # Build config dict
+        config = {
+            "model": "cells",
+            "thermo_dim": thermo_dim,
+            "super_resolution": super_resolution,
+            "learning_rate_init": lr_init,
+            "learning_rate_end": lr_end,
+            "batch_size": batch_size,
+            "epochs": epochs,
+            "validation": validation,
+            "validation_split": validation_split,
+            "early_stopping_patience": early_stopping_patience,
+        }
+
+        # Get weights path (no suffix)
+        weights_path = Path(models_dir) / "cells.weights.h5"
+
+        # Calculate training time from history
+        epochs_trained = len(history["loss"])
+        training_time_seconds = None  # Could be tracked if needed
+
+        # Compute test metrics automatically
+        test_metrics = None
+        try:
+            settings = get_settings()
+            test_year = settings.evaluate_year  # Use same setting as evaluate command
+            console.print(f"[yellow]Computing test metrics on year {test_year} (from PYPARAGLIDE_EVALUATE_YEAR)...[/yellow]")
+            test_metrics = _compute_test_metrics(
+                trainer=trainer,
+                year=test_year,
+                threshold=0.5,
+                output="flown",
+                verbose=True,
+            )
+            if test_metrics:
+                console.print(f"[green]Test metrics computed successfully[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Could not compute test metrics: {e}[/yellow]")
+            console.print("[yellow]Run 'pyparaglide evaluate' separately to get test metrics[/yellow]")
+
+        save_experiment_metrics(
+            experiment_name=experiment_name,
+            config=config,
+            train_loss=final_loss,
+            val_loss=final_val_loss,
+            test_metrics=test_metrics,
+            training_time_seconds=training_time_seconds,
+            epochs_trained=epochs_trained,
+            weights_path=weights_path if weights_path.exists() else None,
+            notes=experiment_notes,
+        )
+
+        console.print(f"[green]Experiment saved to: data/models/experiments/{experiment_name}/[/green]")
+
+
+def _compute_test_metrics(
+    trainer: "Trainer",
+    year: int,
+    threshold: float = 0.5,
+    output: str = "flown",
+    verbose: bool = False,
+) -> dict[str, float] | None:
+    """
+    Compute test metrics for a trained model.
+
+    Args:
+        trainer: Initialized Trainer instance
+        year: Year to use for testing
+        threshold: Decision threshold
+        output: Output to evaluate ('flown' or 'crossed')
+        verbose: Whether to print progress
+
+    Returns:
+        Dictionary with metrics or None if evaluation failed
+    """
+    import numpy as np
+    from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+
+    if verbose:
+        console.print(f"[yellow]Evaluating model on {year} data...[/yellow]")
+
+    # Find indices for the test year
+    test_indices = [
+        i for i, d in enumerate(trainer.dataset.meteo_days)
+        if d.year == year
+    ]
+
+    if not test_indices:
+        if verbose:
+            console.print(f"[red]No data found for year {year}[/red]")
+        return None
+
+    # Map output name to index
+    output_map = {"flown": 0, "crossed": 1}
+    if output not in output_map:
+        if verbose:
+            console.print(f"[red]Invalid output: {output}[/red]")
+        return None
+
+    output_idx = output_map[output]
+
+    # Use all cells for CELLS model
+    cells_to_use = list(range(trainer.nb_cells))
+
+    # Prepare data
+    X_full, Y_full = trainer.prepare_data(cells=cells_to_use)
+
+    # Filter for test year
+    X_test = [x[test_indices] for x in X_full]
+    Y_test_raw = [y[test_indices] for y in Y_full]
+
+    # Check if output index exists
+    if output_idx >= len(Y_test_raw):
+        if verbose:
+            console.print(f"[red]Output index {output_idx} not available[/red]")
+        return None
+
+    # Flatten for evaluation
+    y_true = Y_test_raw[output_idx].flatten()
+
+    # Load model if not already loaded
+    if trainer.model is None:
+        trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix="")
+
+    # Predict
+    preds = trainer.model.predict(X_test, verbose=0 if not verbose else 1)
+
+    if output_idx >= len(preds):
+        if verbose:
+            console.print(f"[red]Prediction output {output_idx} not available[/red]")
+        return None
+
+    # Flatten predictions
+    y_pred_prob = preds[output_idx].flatten()
+
+    # Calculate metrics
+    y_pred_bool = (y_pred_prob >= threshold).astype(int)
+    y_true_int = y_true.astype(int)
+
+    # Check if both classes present
+    unique_labels = sorted(set(y_true_int) | set(y_pred_bool))
+    if len(unique_labels) < 2:
+        if verbose:
+            console.print(f"[yellow]Only one class present, skipping metrics[/yellow]")
+        return None
+
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true_int, y_pred_bool, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+
+    # ROC AUC
+    try:
+        auc = roc_auc_score(y_true_int, y_pred_prob)
+    except ValueError:
+        auc = None
+
+    # Precision, Recall, F1
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    # Accuracy
+    accuracy = (tp + tn) / (tp + tn + fp + fn)
+
+    return {
+        "roc_auc": auc,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "accuracy": accuracy,
+        "threshold": threshold,
+        "confusion_matrix": {
+            "true_negatives": int(tn),
+            "false_positives": int(fp),
+            "false_negatives": int(fn),
+            "true_positives": int(tp),
+        },
+    }
+
 
 @app.command()
 def evaluate(
-    year: int = typer.Option(2025, "--year", "-y", help="Year to use for testing"),
+    year: int = typer.Option(None, "--year", "-y", help="Year to use for testing (default: PYPARAGLIDE_EVALUATE_YEAR)"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
-    threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
+    threshold: float = typer.Option(None, "--threshold", "-t", help="Decision threshold (default: PYPARAGLIDE_EVALUATE_THRESHOLD)"),
     output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC)"),
-    thermo: bool = typer.Option(False, "--thermo", help="Model uses thermodynamic parameters"),
-    suffix: str = typer.Option("", "--suffix", "-s", help="Model suffix for versioning (e.g., '_thermo', '_baseline')"),
 ) -> None:
     """
     Evaluate trained model performance on a specific test year.
@@ -758,8 +945,15 @@ def evaluate(
     - flown: Basic flyability (default)
     - crossed: XC cross-country potential
 
+    Thermo parameters are automatically detected from the dataset.
+
+    Default values for --year and --threshold are read from:
+    - PYPARAGLIDE_EVALUATE_YEAR (default: 2025)
+    - PYPARAGLIDE_EVALUATE_THRESHOLD (default: 0.5)
+
     Example:
-        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed --thermo --suffix _thermo
+        pyparaglide evaluate  # Uses defaults from .env
+        pyparaglide evaluate --year 2021 --threshold 0.1
     """
     import numpy as np
     from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
@@ -772,25 +966,29 @@ def evaluate(
         data_dir = settings.pkl_dir
     if models_dir is None:
         models_dir = settings.models_dir
-
-    # Determine suffix if not provided
-    if not suffix:
-        suffix = "_thermo" if thermo else ""
+    if year is None:
+        year = settings.evaluate_year
+    if threshold is None:
+        threshold = settings.evaluate_threshold
 
     console.print(f"[bold cyan]Evaluating CELLS model on year {year}[/bold cyan]")
     console.print(f"[dim]Data: {data_dir}[/dim]")
     console.print(f"[dim]Models: {models_dir}[/dim]")
-    console.print(f"[dim]Threshold: {threshold}[/dim]")
-    console.print(f"[dim]Thermo: {thermo}, Suffix: {suffix}[/dim]\n")
+    console.print(f"[dim]Threshold: {threshold}[/dim]\n")
 
-    # Initialize Trainer
+    # Initialize Trainer - thermo_dim auto-detected from dataset
     trainer = Trainer(
         data_dir=data_dir,
         model_type=ModelType.CELLS,
         problem_formulation=ProblemFormulation.CLASSIFICATION,
         models_dir=models_dir,
-        thermo_dim=4 if thermo else 0,
+        thermo_dim=None,  # Auto-detect from dataset
     )
+
+    # Show detected thermo parameters
+    thermo_dim = trainer.thermo_dim if hasattr(trainer, "thermo_dim") else 0
+    if thermo_dim > 0:
+        console.print(f"[dim]Thermo parameters: {thermo_dim}[/dim]\n")
 
     # Find indices for the test year
     # dataset.meteo_days contains all available days
@@ -851,7 +1049,7 @@ def evaluate(
 
     # Load Model & Predict
     console.print("[yellow]Loading model and predicting...[/yellow]")
-    trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix=suffix)
+    trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix="")  # No suffix - single model format
 
     preds = trainer.model.predict(X_test, verbose=1)
 
@@ -1000,124 +1198,6 @@ def forecast(
 
     console.print(f"\n[green]Forecast complete![/green]")
     console.print(f"Output: [cyan]{output_path}[/cyan]")
-
-
-@app.command()
-def forecast_ab_test(
-    date: str = typer.Option(None, "--date", "-d", help="Target date (YYYY-MM-DD, default: today)"),
-    models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
-    grib_dir: str = typer.Option(None, "--grib-dir", "-g", help="Directory containing GRIB files"),
-    output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for A/B test results"),
-    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
-    baseline_variant: str = typer.Option("", "--baseline", help="Baseline model variant (default: empty for cells.weights.h5)"),
-    thermo_variant: str = typer.Option("thermo", "--thermo", help="Thermo model variant (default: thermo for cells_thermo.weights.h5)"),
-) -> None:
-    """
-    Generate A/B test forecast comparing baseline and thermo-enhanced models.
-
-    Example:
-        pyparaglide forecast-ab-test --date 2025-06-15
-    """
-    import datetime as dt
-    import json
-
-    import numpy as np  # NEW: needed for np.mean in comparison
-
-    settings = get_settings()
-
-    # Use defaults from settings if not specified
-    if models_dir is None:
-        models_dir = settings.models_dir
-    if grib_dir is None:
-        # Use parent of gfs_dir (data/gfs) instead of gfs_dir (data/gfs/anl)
-        # Forecast files should be in data/gfs/forecasts/, not data/gfs/anl/forecasts/
-        gfs_path = Path(settings.gfs_dir)
-        grib_dir = str(gfs_path.parent / "forecasts" if gfs_path.parent.name == "gfs" else gfs_path / "forecasts")
-    if output_dir is None:
-        output_dir = str(Path(settings.output_dir) / "ab_tests")
-    if bbox is None:
-        bbox = settings.bbox
-
-    # Parse date
-    if date is None:
-        target_date = dt.date.today()
-    else:
-        try:
-            target_date = dt.datetime.strptime(date, "%Y-%m-%d").date()
-        except ValueError:
-            console.print(f"[red]Invalid date format: {date}[/red]")
-            console.print("Use format: [cyan]YYYY-MM-DD[/cyan]")
-            raise typer.Exit(1)
-
-    console.print(f"[bold cyan]A/B Testing: baseline vs thermo[/bold cyan]")
-    console.print(f"[dim]Date: {target_date.isoformat()}[/dim]")
-    console.print(f"[dim]Models: {models_dir}[/dim]")
-    console.print(f"[dim]Baseline: {baseline_variant}, Thermo: {thermo_variant}[/dim]\n")
-
-    # Find GRIB files for the target date
-    grib_path = Path(grib_dir)
-    grib_files = []
-    for hour in [6, 12, 18]:
-        grib_file = grib_path / f"{target_date.strftime('%Y%m%d')}-{hour:02d}.grib2"
-        if grib_file.exists():
-            grib_files.append(grib_file)
-        else:
-            console.print(f"[yellow]Warning: GRIB file not found: {grib_file}[/yellow]")
-
-    if len(grib_files) < 3:
-        console.print(f"[red]Error: Found only {len(grib_files)}/3 GRIB files[/red]")
-        console.print("Expected files for 06h, 12h, 18h forecasts")
-        raise typer.Exit(1)
-
-    # Create output directory
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    # Generate baseline forecast
-    console.print("[yellow]Loading baseline model...[/yellow]")
-    forecaster_baseline = Forecaster(models_dir, ProblemFormulation.CLASSIFICATION, model_variant=baseline_variant)
-
-    console.print("[yellow]Running baseline prediction...[/yellow]")
-    results_baseline = forecaster_baseline.predict_day(grib_files, target_date, tuple(float(x) for x in bbox.split(",")))
-
-    # Generate thermo forecast
-    console.print("[yellow]Loading thermo model...[/yellow]")
-    forecaster_thermo = Forecaster(models_dir, ProblemFormulation.CLASSIFICATION, model_variant=thermo_variant)
-
-    console.print("[yellow]Running thermo prediction...[/yellow]")
-    results_thermo = forecaster_thermo.predict_day(grib_files, target_date, tuple(float(x) for x in bbox.split(",")))
-
-    # Compare results
-    # Extract flyability values from predictions list
-    baseline_flyability = [p["flyability"] for p in results_baseline.get("predictions", [])]
-    thermo_flyability = [p["flyability"] for p in results_thermo.get("predictions", [])]
-
-    baseline_mean = np.mean(baseline_flyability) if baseline_flyability else 0.0
-    thermo_mean = np.mean(thermo_flyability) if thermo_flyability else 0.0
-    difference = thermo_mean - baseline_mean
-
-    comparison = {
-        "date": target_date.isoformat(),
-        "baseline_variant": baseline_variant,
-        "thermo_variant": thermo_variant,
-        "baseline_mean_flyability": float(baseline_mean),
-        "thermo_mean_flyability": float(thermo_mean),
-        "difference_mean_flyability": float(difference),
-        "baseline_results": results_baseline,
-        "thermo_results": results_thermo,
-    }
-
-    # Save results
-    output_file = output_path / f"ab_test_{target_date.isoformat()}.json"
-    console.print("[yellow]Saving A/B test results...[/yellow]")
-    with open(output_file, "w") as f:
-        json.dump(comparison, f, indent=2)
-
-    console.print(f"\n[green]A/B test complete![/green]")
-    console.print(f"Baseline mean flyability: [cyan]{baseline_mean:.4f}[/cyan]")
-    console.print(f"Thermo mean flyability: [cyan]{thermo_mean:.4f}[/cyan]")
-    console.print(f"Difference: [cyan]{difference:+.4f}[/cyan]")
-    console.print(f"Output: [cyan]{output_file}[/cyan]")
 
 
 @app.command()
@@ -1391,6 +1471,172 @@ Missing days: {len(meteo_result.missing_days)}"""
         # Show disclaimer
         console.print(f"\n[dim]Analysis results are recommendations based on your data.[/dim]")
         console.print(f"[dim]You may have intentionally chosen different settings.[/dim]")
+
+
+@app.command()
+def experiments(
+    list_all: bool = typer.Option(False, "--list", "-l", help="List all experiments"),
+    show: str = typer.Option(None, "--show", "-s", help="Show details of an experiment"),
+    compare: str = typer.Option(None, "--compare", "-c", help="Compare experiment against baseline (format: exp1,exp2)"),
+    baseline: str = typer.Option("baseline_v1", "--baseline", "-b", help="Baseline experiment name"),
+    experiments_dir: str = typer.Option(None, "--experiments-dir", help="Custom experiments directory"),
+) -> None:
+    """
+    Manage and compare training experiments.
+
+    Examples:
+        # List all experiments
+        pyparaglide experiments --list
+
+        # Show experiment details
+        pyparaglide experiments --show my_experiment
+
+        # Compare two experiments
+        pyparaglide experiments --compare baseline_v1,resnet_v2
+    """
+    from pyparaglide.experiments import ExperimentComparator, ExperimentTracker
+
+    settings = get_settings()
+    exp_dir = experiments_dir or str(Path(settings.models_dir) / "experiments")
+    tracker = ExperimentTracker(exp_dir)
+
+    if show:
+        # Show experiment details
+        from rich.panel import Panel
+
+        try:
+            metrics = tracker.load_metrics(show)
+            console.print(Panel(f"[bold cyan]Experiment: {metrics['experiment_name']}[/bold cyan]", border_style="cyan"))
+
+            table = Table(show_header=True, header_style="bold magenta")
+            table.add_column("Property", style="dim")
+            table.add_column("Value")
+
+            table.add_row("Date", metrics.get("date", "N/A"))
+            table.add_row("Git Branch", metrics.get("git_branch", "N/A"))
+            table.add_row("Git Commit", metrics.get("git_commit", "N/A")[:8] if metrics.get("git_commit") else "N/A")
+            table.add_row("Train Loss", f"{metrics.get('train_loss', 'N/A'):.4f}" if metrics.get("train_loss") else "N/A")
+            table.add_row("Val Loss", f"{metrics.get('val_loss', 'N/A'):.4f}" if metrics.get("val_loss") else "N/A")
+            table.add_row("Epochs", str(metrics.get("epochs_trained", "N/A")))
+
+            console.print(table)
+
+            # Show test metrics
+            if "test_metrics" in metrics and metrics["test_metrics"]:
+                console.print("\n[bold]Test Metrics:[/bold]")
+                t_table = Table(show_header=True, header_style="bold magenta")
+                t_table.add_column("Metric", style="dim")
+                t_table.add_column("Value")
+
+                # Separate confusion matrix from other metrics
+                confusion_matrix = None
+                for key, value in metrics["test_metrics"].items():
+                    if key == "confusion_matrix" and isinstance(value, dict):
+                        confusion_matrix = value
+                    elif value is not None:
+                        if isinstance(value, float):
+                            t_table.add_row(key, f"{value:.4f}")
+                        else:
+                            t_table.add_row(key, str(value))
+
+                console.print(t_table)
+
+                # Show confusion matrix as separate table
+                if confusion_matrix:
+                    console.print("\n[bold]Confusion Matrix:[/bold]")
+                    cm_table = Table(show_header=True, header_style="bold magenta")
+                    cm_table.add_column("", style="dim")
+                    cm_table.add_column("Count", style="cyan")
+                    cm_table.add_column("Meaning", style="dim")
+
+                    cm_table.add_row(
+                        "True Negatives",
+                        f"[green]{confusion_matrix.get('true_negatives', 0):,}[/green]",
+                        "Correctly predicted NOT flyable",
+                    )
+                    cm_table.add_row(
+                        "False Positives",
+                        f"[red]{confusion_matrix.get('false_positives', 0):,}[/red]",
+                        "Predicted flyable, but wasn't (Wasted trip)",
+                    )
+                    cm_table.add_row(
+                        "False Negatives",
+                        f"[yellow]{confusion_matrix.get('false_negatives', 0):,}[/yellow]",
+                        "Predicted NOT flyable, but was (Missed day)",
+                    )
+                    cm_table.add_row(
+                        "True Positives",
+                        f"[green]{confusion_matrix.get('true_positives', 0):,}[/green]",
+                        "Correctly predicted flyable",
+                    )
+
+                    console.print(cm_table)
+
+            # Show config
+            if "config" in metrics and metrics["config"]:
+                console.print("\n[bold]Configuration:[/bold]")
+                c_table = Table(show_header=False)
+                c_table.add_column("Key", style="dim")
+                c_table.add_column("Value")
+
+                for key, value in metrics["config"].items():
+                    c_table.add_row(key, str(value))
+
+                console.print(c_table)
+
+            if metrics.get("notes"):
+                console.print(f"\n[bold]Notes:[/bold] {metrics['notes']}")
+
+        except FileNotFoundError:
+            console.print(f"[red]Experiment not found: {show}[/red]")
+            raise typer.Exit(1)
+
+    elif compare:
+        # Compare two experiments
+        parts = compare.split(",")
+        if len(parts) != 2:
+            console.print(f"[red]Invalid compare format. Use: exp1,exp2[/red]")
+            raise typer.Exit(1)
+
+        exp1, exp2 = parts
+        comparator = ExperimentComparator(exp_dir)
+        try:
+            comparison = comparator.compare(exp1, exp2)
+            comparator.print_comparison(comparison)
+        except FileNotFoundError as e:
+            console.print(f"[red]Experiment not found: {e}[/red]")
+            raise typer.Exit(1)
+
+    elif list_all:
+        # List all experiments
+        exps = tracker.list_experiments()
+        if not exps:
+            console.print("[yellow]No experiments found[/yellow]")
+            return
+
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Name", style="cyan")
+        table.add_column("Date", style="green")
+        table.add_column("ROC AUC", style="yellow")
+        table.add_column("Val Loss", style="yellow")
+
+        for exp in sorted(exps):
+            try:
+                metrics = tracker.load_metrics(exp)
+                auc = metrics.get("test_metrics", {}).get("roc_auc", None)
+                loss = metrics.get("val_loss", None)
+                table.add_row(
+                    exp,
+                    metrics.get("date", "N/A"),
+                    f"{auc:.4f}" if auc else "N/A",
+                    f"{loss:.4f}" if loss else "N/A",
+                )
+            except FileNotFoundError:
+                table.add_row(exp, "[red]corrupted[/red]", "-", "-")
+
+        console.print(table)
+    else:
+        console.print("[yellow]Use --list, --show, or --compare[/yellow]")
 
 
 @app.callback()

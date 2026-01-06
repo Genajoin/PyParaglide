@@ -194,7 +194,7 @@ def test_analyze_with_bbox_filter(sample_flights: Path):
     """Test analysis with bbox filter."""
     analyzer = FlightAnalyzer(
         flights_dir=sample_flights,
-        bbox=(45.0, 46.0, 13.0, 14.0),  # Only Lijak (45.8, 13.9) inside
+        bbox=(45.0, 46.0, 13.5, 14.5),  # Only Lijak (45.8, 13.9) inside
     )
     result = analyzer.analyze(min_flights_threshold=0)
 
@@ -203,7 +203,7 @@ def test_analyze_with_bbox_filter(sample_flights: Path):
     assert "45,13" in result.by_cell
     assert result.bbox_coverage is not None
     assert result.bbox_coverage.inside == 1
-    assert result.bbox_coverage.outside == 2  # Kobala and Stol are outside
+    assert result.bbox_coverage.outside == 2  # Kobala (46.5, 13.5) and Stol (46.3, 13.4) are outside (lat > 46.0)
 
 
 def test_analyze_with_min_flights_threshold(sample_flights: Path):

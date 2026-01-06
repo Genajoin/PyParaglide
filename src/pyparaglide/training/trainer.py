@@ -30,7 +30,7 @@ class Trainer:
         model_type: ModelType = ModelType.CELLS,
         problem_formulation: ProblemFormulation = ProblemFormulation.CLASSIFICATION,
         models_dir: Path | str = "data/models",
-        thermo_dim: int = 0,  # NEW: number of thermo parameters (0 or 4)
+        thermo_dim: int | None = None,  # None = auto-detect from dataset
     ):
         """
         Initialize trainer.
@@ -40,22 +40,29 @@ class Trainer:
             model_type: Must be ModelType.CELLS
             problem_formulation: CLASSIFICATION or REGRESSION
             models_dir: Directory to save/load model weights
-            thermo_dim: Number of thermo parameters (0 for baseline, 4 for thermo-enhanced)
+            thermo_dim: Number of thermo parameters (None = auto-detect from dataset)
         """
         self.data_dir = Path(data_dir)
         self.model_type = model_type
         self.problem_formulation = problem_formulation
         self.models_dir = Path(models_dir)
+
+        # Load dataset first (needed for thermo_dim auto-detection)
+        self.dataset = Dataset(data_dir)
+        self.nb_cells = self.dataset.nb_cells
+        self.nb_days = self.dataset.nb_days
+
+        # Auto-detect thermo_dim from dataset if not specified
+        if thermo_dim is None:
+            # Check if dataset has thermo parameters
+            has_thermo = any(len(params) > 0 for params in self.dataset.params_thermo)
+            thermo_dim = 4 if has_thermo else 0
+
         self.thermo_dim = thermo_dim  # NEW
 
         # Model parameters
         self.wind_dim = 8
         self.nb_altitudes = 1  # Changed from 5 - altitude binning removed
-
-        # Load dataset
-        self.dataset = Dataset(data_dir)
-        self.nb_cells = self.dataset.nb_cells
-        self.nb_days = self.dataset.nb_days
 
         # Model will be created later
         self.model: tf.keras.Model | None = None

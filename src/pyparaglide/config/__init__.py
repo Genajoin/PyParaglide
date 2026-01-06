@@ -126,6 +126,15 @@ class Settings(BaseSettings):
     spot_cluster_distance_km: float = 2.0
 
     # ==============================================================================
+    # Evaluation Parameters
+    # ==============================================================================
+    # Default year for evaluate command and experiment test metrics
+    evaluate_year: int = 2025
+
+    # Default threshold for evaluate command
+    evaluate_threshold: float = 0.5
+
+    # ==============================================================================
     # Processing
     # ==============================================================================
     # Enable debug mode (keep temporary files, verbose output)
