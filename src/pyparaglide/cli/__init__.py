@@ -766,12 +766,31 @@ def _train_cells(
         epochs_trained = len(history["loss"])
         training_time_seconds = None  # Could be tracked if needed
 
+        # Compute test metrics automatically
+        test_metrics = None
+        try:
+            settings = get_settings()
+            test_year = settings.evaluate_year  # Use same setting as evaluate command
+            console.print(f"[yellow]Computing test metrics on year {test_year} (from PYPARAGLIDE_EVALUATE_YEAR)...[/yellow]")
+            test_metrics = _compute_test_metrics(
+                trainer=trainer,
+                year=test_year,
+                threshold=0.5,
+                output="flown",
+                verbose=True,
+            )
+            if test_metrics:
+                console.print(f"[green]Test metrics computed successfully[/green]")
+        except Exception as e:
+            console.print(f"[yellow]Could not compute test metrics: {e}[/yellow]")
+            console.print("[yellow]Run 'pyparaglide evaluate' separately to get test metrics[/yellow]")
+
         save_experiment_metrics(
             experiment_name=experiment_name,
             config=config,
             train_loss=final_loss,
             val_loss=final_val_loss,
-            test_metrics=None,  # Test metrics need separate evaluation
+            test_metrics=test_metrics,
             training_time_seconds=training_time_seconds,
             epochs_trained=epochs_trained,
             weights_path=weights_path if weights_path.exists() else None,
@@ -781,12 +800,137 @@ def _train_cells(
         console.print(f"[green]Experiment saved to: data/models/experiments/{experiment_name}/[/green]")
 
 
+def _compute_test_metrics(
+    trainer: "Trainer",
+    year: int,
+    threshold: float = 0.5,
+    output: str = "flown",
+    verbose: bool = False,
+) -> dict[str, float] | None:
+    """
+    Compute test metrics for a trained model.
+
+    Args:
+        trainer: Initialized Trainer instance
+        year: Year to use for testing
+        threshold: Decision threshold
+        output: Output to evaluate ('flown' or 'crossed')
+        verbose: Whether to print progress
+
+    Returns:
+        Dictionary with metrics or None if evaluation failed
+    """
+    import numpy as np
+    from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
+
+    if verbose:
+        console.print(f"[yellow]Evaluating model on {year} data...[/yellow]")
+
+    # Find indices for the test year
+    test_indices = [
+        i for i, d in enumerate(trainer.dataset.meteo_days)
+        if d.year == year
+    ]
+
+    if not test_indices:
+        if verbose:
+            console.print(f"[red]No data found for year {year}[/red]")
+        return None
+
+    # Map output name to index
+    output_map = {"flown": 0, "crossed": 1}
+    if output not in output_map:
+        if verbose:
+            console.print(f"[red]Invalid output: {output}[/red]")
+        return None
+
+    output_idx = output_map[output]
+
+    # Use all cells for CELLS model
+    cells_to_use = list(range(trainer.nb_cells))
+
+    # Prepare data
+    X_full, Y_full = trainer.prepare_data(cells=cells_to_use)
+
+    # Filter for test year
+    X_test = [x[test_indices] for x in X_full]
+    Y_test_raw = [y[test_indices] for y in Y_full]
+
+    # Check if output index exists
+    if output_idx >= len(Y_test_raw):
+        if verbose:
+            console.print(f"[red]Output index {output_idx} not available[/red]")
+        return None
+
+    # Flatten for evaluation
+    y_true = Y_test_raw[output_idx].flatten()
+
+    # Load model if not already loaded
+    if trainer.model is None:
+        trainer.create_model(cells=cells_to_use, load_weights=True, weight_suffix="")
+
+    # Predict
+    preds = trainer.model.predict(X_test, verbose=0 if not verbose else 1)
+
+    if output_idx >= len(preds):
+        if verbose:
+            console.print(f"[red]Prediction output {output_idx} not available[/red]")
+        return None
+
+    # Flatten predictions
+    y_pred_prob = preds[output_idx].flatten()
+
+    # Calculate metrics
+    y_pred_bool = (y_pred_prob >= threshold).astype(int)
+    y_true_int = y_true.astype(int)
+
+    # Check if both classes present
+    unique_labels = sorted(set(y_true_int) | set(y_pred_bool))
+    if len(unique_labels) < 2:
+        if verbose:
+            console.print(f"[yellow]Only one class present, skipping metrics[/yellow]")
+        return None
+
+    # Compute confusion matrix
+    cm = confusion_matrix(y_true_int, y_pred_bool, labels=[0, 1])
+    tn, fp, fn, tp = cm.ravel()
+
+    # ROC AUC
+    try:
+        auc = roc_auc_score(y_true_int, y_pred_prob)
+    except ValueError:
+        auc = None
+
+    # Precision, Recall, F1
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+    # Accuracy
+    accuracy = (tp + tn) / (tp + tn + fp + fn)
+
+    return {
+        "roc_auc": auc,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "accuracy": accuracy,
+        "threshold": threshold,
+        "confusion_matrix": {
+            "true_negatives": int(tn),
+            "false_positives": int(fp),
+            "false_negatives": int(fn),
+            "true_positives": int(tp),
+        },
+    }
+
+
 @app.command()
 def evaluate(
-    year: int = typer.Option(2025, "--year", "-y", help="Year to use for testing"),
+    year: int = typer.Option(None, "--year", "-y", help="Year to use for testing (default: PYPARAGLIDE_EVALUATE_YEAR)"),
     data_dir: str = typer.Option(None, "--data-dir", "-d", help="Directory containing PKL files"),
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
-    threshold: float = typer.Option(0.5, "--threshold", "-t", help="Decision threshold for classification"),
+    threshold: float = typer.Option(None, "--threshold", "-t", help="Decision threshold (default: PYPARAGLIDE_EVALUATE_THRESHOLD)"),
     output: str = typer.Option("flown", "--output", "-o", help="Output to evaluate: 'flown' (default), 'crossed' (XC)"),
 ) -> None:
     """
@@ -803,8 +947,13 @@ def evaluate(
 
     Thermo parameters are automatically detected from the dataset.
 
+    Default values for --year and --threshold are read from:
+    - PYPARAGLIDE_EVALUATE_YEAR (default: 2025)
+    - PYPARAGLIDE_EVALUATE_THRESHOLD (default: 0.5)
+
     Example:
-        pyparaglide evaluate --year 2025 --threshold 0.7 --output crossed
+        pyparaglide evaluate  # Uses defaults from .env
+        pyparaglide evaluate --year 2021 --threshold 0.1
     """
     import numpy as np
     from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score
@@ -817,6 +966,10 @@ def evaluate(
         data_dir = settings.pkl_dir
     if models_dir is None:
         models_dir = settings.models_dir
+    if year is None:
+        year = settings.evaluate_year
+    if threshold is None:
+        threshold = settings.evaluate_threshold
 
     console.print(f"[bold cyan]Evaluating CELLS model on year {year}[/bold cyan]")
     console.print(f"[dim]Data: {data_dir}[/dim]")
