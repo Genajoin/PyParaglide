@@ -103,3 +103,26 @@ class BuildFlightsPhase:
             pickle.dump(flights_by_cell_day, f)
 
         print(f"  Created flights_by_cell_day.pkl")
+
+        # NEW: Compute cell statistics
+        print("\n  Computing cell statistics...")
+        cell_flight_counts = np.zeros(nb_cells, dtype=np.int32)
+        for linear_idx in range(len(flights_by_cell_day)):
+            cell_id = linear_idx % nb_cells
+            cell_flight_counts[cell_id] += len(flights_by_cell_day[linear_idx])
+
+        # Save statistics for filtering pass
+        stats_dict = {
+            'total_flights_per_cell': cell_flight_counts.tolist(),
+            'nb_cells_original': nb_cells,
+            'nb_days': nb_days,
+        }
+
+        with open(self.out_dir / "cell_statistics.pkl", 'wb') as f:
+            pickle.dump(stats_dict, f)
+
+        print(f"\n  Cell statistics:")
+        print(f"    Total cells: {nb_cells}")
+        print(f"    Max flights/cell: {cell_flight_counts.max()}")
+        print(f"    Min flights/cell: {cell_flight_counts.min()}")
+        print(f"    Mean flights/cell: {cell_flight_counts.mean():.1f}")

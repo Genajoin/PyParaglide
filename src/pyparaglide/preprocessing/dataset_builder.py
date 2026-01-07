@@ -3,11 +3,12 @@ Dataset builder for PyParaglide.
 
 Builds PKL files from GFS GRIB data and flight records.
 
-This is the full implementation using the 4-phase pipeline:
+This is the full implementation using the 5-phase pipeline:
 1. BuildCellsPhase - Generate 1x1 degree cells and map to GRIB grid
 2. BuildMeteoPhase - Scan GFS data and extract weather parameters
-3. BuildFlightsPhase - Process xContest flights and create spot PKL files
+3. BuildFlightsPhase - Process xContest flights and create flight PKL files
 4. BuildTerrainPhase - Extract mountainess data from elevation tiles
+3.5. FilterCellsPhase - Filter data-sparse cells and reindex all PKL files
 
 CRITICAL FIX: build_all() method accepts multiple date ranges and accumulates
 ALL data before saving, fixing the sequential overwrite bug.
@@ -22,6 +23,7 @@ from pyparaglide.preprocessing.phases import (
     BuildCellsPhase,
     BuildMeteoPhase,
     BuildFlightsPhase,
+    FilterCellsPhase,
     BuildTerrainPhase,
 )
 
@@ -96,6 +98,7 @@ class DatasetBuilder:
         self,
         date_ranges: List[Tuple[date, date]],
         min_flights_per_spot: int = 200,
+        min_flights_per_cell: int = 0,
         include_flights: bool = True,
         cluster_distance_km: Optional[float] = None,
         num_workers: int = 4,
@@ -112,6 +115,7 @@ class DatasetBuilder:
         Args:
             date_ranges: List of (start_date, end_date) tuples
             min_flights_per_spot: Minimum flights required per spot
+            min_flights_per_cell: Minimum flights per cell for training (0 = no filtering)
             include_flights: Whether to include flight data processing
             cluster_distance_km: Spot clustering radius in km
             num_workers: Number of multiprocessing workers for GRIB processing
@@ -184,7 +188,7 @@ class DatasetBuilder:
             with open(self.output_dir / "flights_by_cell_day.pkl", 'wb') as f:
                 pickle.dump(flights_by_cell_day, f)
 
-        # Phase 4: Build terrain data
+        # Phase 4: Build terrain data (BEFORE Phase 3.5 to allow filtering)
         if self.elevation_dir:
             phase4 = BuildTerrainPhase(
                 elevation_dir=self.elevation_dir,
@@ -202,6 +206,24 @@ class DatasetBuilder:
             mountainess_by_cell_alt = np.zeros((nb_cells, 5), dtype=np.float32)
             with open(self.output_dir / "mountainess_by_cell_alt.pkl", 'wb') as f:
                 pickle.dump(mountainess_by_cell_alt, f)
+
+        # Phase 3.5: Filter data-sparse cells (AFTER Phase 4)
+        if min_flights_per_cell > 0 and include_flights:
+            phase3_5 = FilterCellsPhase(
+                out_dir=self.output_dir,
+                min_flights_per_cell=min_flights_per_cell,
+            )
+            filter_result = phase3_5.execute()
+
+            # Update cells_latlon after filtering
+            cells_latlon = [cells_latlon[i] for i in filter_result['cells_kept']]
+
+            print(f"\n  Filtered: {filter_result['nb_cells_after']}/{filter_result['nb_cells_before']} cells")
+        else:
+            if min_flights_per_cell == 0:
+                print("\n=== Phase 3.5: Skipping cell filtering (min_flights_per_cell=0) ===")
+            elif not include_flights:
+                print("\n=== Phase 3.5: Skipping cell filtering (no flight data) ===")
 
         print()
         print("Dataset build complete!")
