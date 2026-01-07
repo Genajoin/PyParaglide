@@ -149,16 +149,16 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir
             hourly_queue.put((day_date, hour, None))
             continue
 
-        # Check cache if enabled and grib_path is provided
+        # Check per-cell cache if enabled and grib_path is provided
         if cache and grib_path:
             try:
-                config = {
-                    'bbox': None,  # Will be validated by is_valid
-                    'nb_cells': len(cells_latlon),
-                }
-                if cache.is_valid(grib_path, config):
-                    # Load from cache - fast path!
-                    values = cache.load(grib_path)
+                # Check which cells have per-cell cache
+                _, missing_cells = cache.has_cell_cache(grib_path, cells_latlon)
+
+                # Only load from cache if ALL cells are cached
+                if not missing_cells:
+                    # Load all cells from per-cell cache
+                    values = cache.load_cells_batch(grib_path, cells_latlon, flatten=True).tolist()
                     hourly_queue.put((day_date, hour, values))
                     # Cleanup temp file
                     if os.path.exists(temp_path):
@@ -191,21 +191,13 @@ def file_processor(job_queue, hourly_queue, grib_params, cells_latlon, cache_dir
             else:
                 hourly_queue.put((day_date, hour, values))
 
-                # Save to cache if enabled and grib_path is provided
+                # Save to per-cell cache if enabled and grib_path is provided
                 if cache and grib_path and values is not None:
                     try:
                         # Reshape flat values to (nb_cells, 69) for cache
                         cached_values = np.array(values, dtype=np.float32).reshape(len(cells_latlon), len(grib_params))
 
-                        # Legacy: Save all cells in one file (for backward compatibility)
-                        cache.save(
-                            grib_path,
-                            cached_values,
-                            config={'bbox': None, 'nb_cells': len(cells_latlon), 'cells_latlon': cells_latlon},
-                            params=grib_params,
-                        )
-
-                        # NEW: Save each cell individually (for bbox-independent caching)
+                        # Save each cell individually (for bbox-independent caching)
                         for cell_idx, (cell_lat, cell_lon) in enumerate(cells_latlon):
                             cell_values = cached_values[cell_idx:cell_idx+1, :]  # Shape (1, 69)
                             cache.save_cell(grib_path, cell_lat, cell_lon, cell_values)

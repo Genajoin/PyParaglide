@@ -366,9 +366,7 @@ class BuildMeteoPhase:
                 print(f"  Using GRIB cache at {cache_dir}")
 
                 # Incremental cache: separate cached vs missing days
-                # Try per-cell cache first (bbox-independent), fallback to legacy cache
-                config = {'bbox': None, 'nb_cells': len(self.cells_latlon)}
-
+                # Using per-cell cache (bbox-independent)
                 for day_date in self.meteo_days:
                     day_cached = True
 
@@ -376,13 +374,12 @@ class BuildMeteoPhase:
                         grb_path = self.gfs_dir / day_date.strftime('%Y-%m') / f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
 
                         # Check if all cells have per-cell cache
-                        _cached_cells, missing_cells = cache.has_cell_cache(grb_path, self.cells_latlon)
+                        _, missing_cells = cache.has_cell_cache(grb_path, self.cells_latlon)
 
                         if missing_cells:
-                            # Some cells don't have per-cell cache, try legacy cache
-                            if not cache.is_valid(grb_path, config):
-                                day_cached = False
-                                break
+                            # Some cells don't have per-cell cache
+                            day_cached = False
+                            break
 
                     if day_cached:
                         cached_days.append(day_date)
@@ -584,7 +581,7 @@ class BuildMeteoPhase:
 
     def _load_from_cache(self, cache, days_to_load=None) -> np.ndarray:
         """
-        Load meteo data from cache for specified days.
+        Load meteo data from per-cell cache for specified days.
 
         Produces matrix of shape (nb_days * nb_cells, 207) where each row is
         [hour6_params(69), hour12_params(69), hour18_params(69)] for a single day-cell.
@@ -609,16 +606,9 @@ class BuildMeteoPhase:
                 for hour in [6, 12, 18]:
                     grb_path = self.gfs_dir / day_date.strftime('%Y-%m') / f"gfsanl_3_{day_date.strftime('%Y%m%d')}_{hour:02d}00_000.grb2"
 
-                    # Try per-cell cache first (bbox-independent)
-                    try:
-                        cell_values = cache.load_cell(grb_path, cell_lat, cell_lon)
-                        row_data.extend(cell_values.flatten())  # Add this cell's 69 params for this hour
-                    except FileNotFoundError:
-                        # Fallback to legacy cache (per-GRIB, bbox-dependent)
-                        values = cache.load(grb_path, flatten=False)
-                        # Find this cell's index in cells_latlon from legacy cache
-                        cell_idx = self.cells_latlon.index((cell_lat, cell_lon))
-                        row_data.extend(values[cell_idx])  # Add this cell's 69 params for this hour
+                    # Load from per-cell cache
+                    cell_values = cache.load_cell(grb_path, cell_lat, cell_lon)
+                    row_data.extend(cell_values.flatten())  # Add this cell's 69 params for this hour
 
                 all_data.append(row_data)  # Append complete row of 207 values
 
