@@ -91,12 +91,17 @@
       background: #da190b;
     }
 
+    .status-container {
+      min-height: 46px;
+      margin-bottom: 10px;
+    }
+
     .status {
       padding: 8px;
       border-radius: 5px;
-      margin-bottom: 10px;
       font-size: 13px;
       text-align: center;
+      transition: opacity 0.3s ease;
     }
 
     .status-success {
@@ -125,12 +130,64 @@
       color: #666;
       padding: 20px;
     }
+
+    /* Стили для автоматизации */
+    .form-group {
+      margin-bottom: 10px;
+    }
+
+    .form-label {
+      display: block;
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 5px;
+    }
+
+    .form-select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      font-size: 13px;
+      background: white;
+      cursor: pointer;
+    }
+
+    .form-select:focus {
+      outline: none;
+      border-color: #2196F3;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 20px;
+      background: #eee;
+      border-radius: 10px;
+      overflow: hidden;
+      margin-bottom: 10px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4CAF50, #45a049);
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    .progress-text {
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 10px;
+      line-height: 1.4;
+    }
   </style>
 </head>
 <body>
   <h1>🎈 XContest Data Collector</h1>
 
-  <div id="status" class="status status-info" style="display: none;"></div>
+  <div class="status-container">
+    <div id="status" class="status status-info" style="display: none;"></div>
+  </div>
 
   <div class="card">
     <div class="stat-row">
@@ -147,6 +204,41 @@
     <button id="refreshBtn" class="button button-primary">🔄 Обновить статистику</button>
     <button id="exportBtn" class="button button-secondary">📥 Экспорт в JSON</button>
     <button id="clearBtn" class="button button-danger">🗑️ Очистить данные</button>
+  </div>
+
+  <!-- Карточка автоматизации -->
+  <div class="card">
+    <h2 style="font-size: 16px; margin: 0 0 15px 0;">🤖 Автоматизация</h2>
+
+    <!-- Выбор диапазона дат -->
+    <div class="form-group">
+      <label class="form-label">Начальная дата:</label>
+      <select id="startDateSelect" class="form-select">
+        <option value="">Загрузка...</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label">Конечная дата:</label>
+      <select id="endDateSelect" class="form-select">
+        <option value="">Загрузка...</option>
+      </select>
+    </div>
+
+    <!-- Прогресс -->
+    <div id="automationProgress" style="display: none; margin-bottom: 10px;">
+      <div class="progress-bar">
+        <div id="progressFill" class="progress-fill"></div>
+      </div>
+      <div class="progress-text">
+        <span id="progressStatus">Обработка...</span>
+      </div>
+    </div>
+
+    <!-- Кнопки управления -->
+    <button id="startAutomationBtn" class="button button-primary">▶️ Запустить автоматизацию</button>
+    <button id="stopAutomationBtn" class="button button-danger" style="display: none;">⏹️ Остановить</button>
+    <button id="resumeAutomationBtn" class="button button-secondary" style="display: none;">▶️ Продолжить</button>
   </div>
 
   <div class="card">
