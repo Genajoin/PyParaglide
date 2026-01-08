@@ -28,7 +28,7 @@ print(f"GFS dir: {settings.gfs_dir}")
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `training_dates` | `str` | Date ranges (format: `YYYY-MM-DD:YYYY-MM-DD,...`) |
-| `bbox` | `str` | Bounding box (format: `lat_min,lat_max,lon_min,lon_max`) |
+| `bbox` | `str` | Bounding box following GeoJSON RFC 7946 (format: `lon_min,lat_min,lon_max,lat_max`) |
 | `gfs_dir` | `Path` | GFS data directory |
 | `pkl_dir` | `Path` | PKL dataset directory |
 | `flights_dir` | `Path` | Flight data directory |

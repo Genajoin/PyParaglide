@@ -75,8 +75,8 @@ class Settings(BaseSettings):
     # ==============================================================================
     # Geographic Bounds
     # ==============================================================================
-    # Bounding box for forecast area: lat_min,lat_max,lon_min,lon_max
-    bbox: str = "45,47,13,15"
+    # Bounding box in GeoJSON RFC 7946 format (lon_min,lat_min,lon_max,lat_max)
+    bbox: str = "13,45,15,47"
 
     # ==============================================================================
     # Data Directories
@@ -147,11 +147,34 @@ class Settings(BaseSettings):
     workers: int = 4
 
     def parse_bbox(self) -> tuple[float, float, float, float]:
-        """Parse bbox string into (lat_min, lat_max, lon_min, lon_max)."""
+        """Parse bbox string into (lon_min, lat_min, lon_max, lat_max) following GeoJSON RFC 7946."""
         parts = [float(x.strip()) for x in self.bbox.split(",")]
         if len(parts) != 4:
             raise ValueError(f"Invalid bbox format: {self.bbox}")
-        return parts[0], parts[1], parts[2], parts[3]
+
+        lon_min, lat_min, lon_max, lat_max = parts
+
+        # Validate coordinate ranges
+        if not (-180 <= lon_min <= 180 and -180 <= lon_max <= 180):
+            raise ValueError(f"Invalid longitude in bbox (must be -180..180): {self.bbox}")
+        if not (-90 <= lat_min <= 90 and -90 <= lat_max <= 90):
+            raise ValueError(f"Invalid latitude in bbox (must be -90..90): {self.bbox}")
+
+        # Validate order (detect old format usage)
+        if lon_min >= lon_max:
+            raise ValueError(
+                f"Invalid bbox: lon_min ({lon_min}) >= lon_max ({lon_max}). "
+                f"Bbox must be in GeoJSON format: lon_min,lat_min,lon_max,lat_max. "
+                f"If you're migrating from old format (lat_min,lat_max,lon_min,lon_max), "
+                f"update your .env file."
+            )
+        if lat_min >= lat_max:
+            raise ValueError(
+                f"Invalid bbox: lat_min ({lat_min}) >= lat_max ({lat_max}). "
+                f"Bbox must be in GeoJSON format: lon_min,lat_min,lon_max,lat_max."
+            )
+
+        return lon_min, lat_min, lon_max, lat_max
 
     def parse_training_dates(self) -> list[tuple[str, str]]:
         """

@@ -39,7 +39,7 @@ class ElevationDownloader:
 
         Args:
             data_dir: Directory for elevation data storage
-            bbox: Bounding box (lat_min, lat_max, lon_min, lon_max)
+            bbox: Bounding box following GeoJSON RFC 7946 (lon_min, lat_min, lon_max, lat_max)
             product: SRTM1 (30m) or SRTM3 (90m)
             max_retries: Maximum download retry attempts
         """
@@ -74,7 +74,7 @@ class ElevationDownloader:
             "output_size_mb": 0,
         }
 
-        lat_min, lat_max, lon_min, lon_max = self.bbox
+        lon_min, lat_min, lon_max, lat_max = self.bbox
 
         print(f"\n=== Downloading {self.product} elevation data ===")
         print(f"  BBox: {lat_min:.2f}°N to {lat_max:.2f}°N, {lon_min:.2f}°E to {lon_max:.2f}°E")
@@ -144,7 +144,7 @@ class ElevationDownloader:
         - SRTM3: tiles are 5°x5°, CGIAR naming: srtm_{col}_{row}.zip
                  col/row are grid indices: col=(lon+185)//5, row=(lat+70)//5
         """
-        lat_min, lat_max, lon_min, lon_max = self.bbox
+        lon_min, lat_min, lon_max, lat_max = self.bbox
 
         tiles = []
 
@@ -211,19 +211,19 @@ class ElevationDownloader:
 
     def _validate_coverage(self) -> None:
         """Validate bbox is within SRTM coverage and warn if outside."""
-        lat_min, lat_max, lon_min, lon_max = self.bbox
+        lon_min, lat_min, lon_max, lat_max = self.bbox
 
         if lat_min < -60 or lat_max > 60:
             print(f"\n[WARNING] SRTM coverage limited to ±60° latitude")
             print(f"  Your bbox: {lat_min}° to {lat_max}°")
             print(f"  Data will be clipped to valid range")
 
-        # Clip to valid range
+        # Clip to valid range (following GeoJSON RFC 7946)
         self.bbox = (
-            max(lat_min, -60),
-            min(lat_max, 60),
             lon_min,  # Longitude has full -180 to +180 coverage
+            max(lat_min, -60),
             lon_max,
+            min(lat_max, 60),
         )
 
     def _download_tile(self, lat: int, lon: int) -> Path | None:

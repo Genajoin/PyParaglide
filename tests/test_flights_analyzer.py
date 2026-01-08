@@ -194,7 +194,7 @@ def test_analyze_with_bbox_filter(sample_flights: Path):
     """Test analysis with bbox filter."""
     analyzer = FlightAnalyzer(
         flights_dir=sample_flights,
-        bbox=(45.0, 46.0, 13.5, 14.5),  # Only Lijak (45.8, 13.9) inside
+        bbox=(13.5, 45.0, 14.5, 46.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946 - Only Lijak (45.8, 13.9) inside
     )
     result = analyzer.analyze(min_flights_threshold=0)
 

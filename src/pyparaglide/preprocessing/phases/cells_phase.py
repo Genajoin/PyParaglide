@@ -21,7 +21,7 @@ class BuildCellsPhase:
                  force: bool = False):
         """
         Args:
-            bbox: (lat_min, lat_max, lon_min, lon_max)
+            bbox: Bounding box following GeoJSON RFC 7946 (lon_min, lat_min, lon_max, lat_max)
             gfs_dir: Path to GFS GRIB files
             out_dir: Output directory for PKL files
             force: Force rebuild even if PKL files exist
@@ -62,7 +62,7 @@ class BuildCellsPhase:
                 print(f"  Config mismatch: saved bbox = {saved_metadata.get('bbox')}")
                 print("  Rebuilding with new bbox...")
 
-        lat_min, lat_max, lon_min, lon_max = self.bbox
+        lon_min, lat_min, lon_max, lat_max = self.bbox
 
         # Generate 1x1 degree cells
         # Note: bbox defines cell centers, so 45,46,12,13 creates 1 cell at (45,12)

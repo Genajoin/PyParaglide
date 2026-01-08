@@ -126,7 +126,7 @@ app.add_typer(download_app, name="dl")
 @analyze_app.command()
 def flights(
     flights_dir: str = typer.Option(None, "--flights-dir", "-d", help="Flights directory"),
-    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box filter: lat_min,lat_max,lon_min,lon_max"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box in GeoJSON format (lon_min,lat_min,lon_max,lat_max)"),
     min_flights: int = typer.Option(0, "--min-flights", "-m", help="Min flights per spot"),
 ) -> None:
     """
@@ -142,7 +142,7 @@ def flights(
 
     Example:
         pyparaglide analyze flights
-        pyparaglide analyze flights --bbox 45,47,13,16 --min-flights 50
+        pyparaglide analyze flights --bbox 13,45,16,47 --min-flights 50
     """
     import datetime as dt
 
@@ -159,7 +159,7 @@ def flights(
             parsed_bbox = tuple(parts)
         else:
             console.print(f"[red]Invalid bbox format: {bbox}[/red]")
-            console.print("Expected: lat_min,lat_max,lon_min,lon_max")
+            console.print("Expected: lon_min,lat_min,lon_max,lat_max (GeoJSON format)")
             raise typer.Exit(1)
 
     # Create analyzer
@@ -269,13 +269,13 @@ Spots with >={min_flights} flights: {len(result.by_spot)}"""
         console.print(f"[bold]Detected Cell Clusters:[/bold]")
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("#", style="cyan")
-        table.add_column("BBox", style="green")
+        table.add_column("BBox (lon_min,lat_min,lon_max,lat_max)", style="green")
         table.add_column("Cells", style="yellow")
         table.add_column("Flights", style="yellow")
         table.add_column("Top Spot", style="blue")
 
         for i, cluster in enumerate(result.clusters[:5], 1):
-            bbox_str = f"{cluster.lat_min},{cluster.lat_max},{cluster.lon_min},{cluster.lon_max}"
+            bbox_str = f"{cluster.lon_min},{cluster.lat_min},{cluster.lon_max},{cluster.lat_max}"
             table.add_row(str(i), bbox_str, str(cluster.count), f"{cluster.flights:,}", cluster.top_spot[:20])
 
         console.print(table)
@@ -283,7 +283,8 @@ Spots with >={min_flights} flights: {len(result.by_spot)}"""
         # Best cluster recommendation
         best = result.clusters[0]
         console.print(f"\n[bold yellow]Recommended bbox for best cluster:[/bold yellow]")
-        console.print(f"  [cyan]--bbox {best.lat_min},{best.lat_max},{best.lon_min},{best.lon_max}[/cyan]")
+        console.print(f"  [cyan]--bbox {best.lon_min},{best.lat_min},{best.lon_max},{best.lat_max}[/cyan]")
+        console.print(f"  [dim](Format: lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946)[/dim]")
         console.print(f"  [dim]({best.flights:,} flights in {best.count} cells)[/dim]")
 
 
@@ -576,7 +577,7 @@ def download_forecast(
 @download_app.command("elevation")
 def download_elevation(
     data_dir: str = typer.Option(None, "--data-dir", "-o", help="Output directory for elevation files"),
-    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box in GeoJSON format (lon_min,lat_min,lon_max,lat_max)"),
 ) -> None:
     """
     Download SRTM elevation data.
@@ -585,7 +586,7 @@ def download_elevation(
 
     Examples:
         pyparaglide download elevation
-        pyparaglide download elevation --bbox 45,47,13,15
+        pyparaglide download elevation --bbox 13,45,15,47
     """
     from pyparaglide.cli._download_helpers import download_elevation_impl
 
@@ -1126,7 +1127,7 @@ def forecast(
     models_dir: str = typer.Option(None, "--models-dir", help="Directory with model weights"),
     grib_dir: str = typer.Option(None, "--grib-dir", "-g", help="Directory containing GRIB files"),
     output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for forecasts"),
-    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box in GeoJSON format (lon_min,lat_min,lon_max,lat_max)"),
 ) -> None:
     """
     Generate paragliding flyability forecast using CELLS model.
@@ -1286,7 +1287,7 @@ def build_dataset(
     gfs_dir: str = typer.Option(None, "--gfs-dir", help="Directory containing GFS GRIB files"),
     flights_dir: str = typer.Option(None, "--flights-dir", help="Directory with xContest JSON files"),
     output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for PKL files"),
-    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
+    bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box in GeoJSON format (lon_min,lat_min,lon_max,lat_max)"),
     min_flights: int = typer.Option(200, "--min-flights", help="Minimum flights per spot"),
     min_cells: int = typer.Option(None, "--min-cells", help="Minimum flights per cell for training (0=no filter, default from .env)"),
     no_flights: bool = typer.Option(False, "--no-flights", help="Skip flight data processing"),
@@ -1429,20 +1430,21 @@ Spots with >={min_flights} flights: {len(flight_result.by_spot)}"""
                 if flight_result.clusters:
                     console.print(f"\n[bold]Top Clusters:[/bold]")
                     table = Table(show_header=True, header_style="bold magenta")
-                    table.add_column("BBox", style="green")
+                    table.add_column("BBox (lon_min,lat_min,lon_max,lat_max)", style="green")
                     table.add_column("Cells", style="yellow")
                     table.add_column("Flights", style="yellow")
                     table.add_column("Top Spot", style="blue")
 
                     for cluster in flight_result.clusters[:3]:
-                        bbox_str = f"{cluster.lat_min},{cluster.lat_max},{cluster.lon_min},{cluster.lon_max}"
+                        bbox_str = f"{cluster.lon_min},{cluster.lat_min},{cluster.lon_max},{cluster.lat_max}"
                         table.add_row(bbox_str, str(cluster.count), f"{cluster.flights:,}", cluster.top_spot[:20])
 
                     console.print(table)
 
                     # Recommendation
                     best = flight_result.clusters[0]
-                    console.print(f"\n[bold yellow]Recommended bbox:[/bold yellow] [cyan]{best.lat_min},{best.lat_max},{best.lon_min},{best.lon_max}[/cyan]")
+                    console.print(f"\n[bold yellow]Recommended bbox:[/bold yellow] [cyan]{best.lon_min},{best.lat_min},{best.lon_max},{best.lat_max}[/cyan]")
+                    console.print(f"[dim](Format: lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946)[/dim]")
                     console.print(f"[dim]({best.flights:,} flights in {best.count} cells)[/dim]")
             except ValueError as e:
                 console.print(f"[yellow]Flight analysis skipped: {e}[/yellow]")

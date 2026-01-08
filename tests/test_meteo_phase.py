@@ -56,7 +56,7 @@ class TestScanMeteoDaysQuick:
     def test_scan_finds_complete_days(self, temp_gfs_dir, temp_output_dir, sample_cells_latlon):
         """Test that quick scan finds only complete days."""
         phase = BuildMeteoPhase(
-            bbox=(45.0, 47.0, 13.0, 15.0),
+            bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
             gfs_dir=temp_gfs_dir,
             cells_latlon=sample_cells_latlon,
             out_dir=temp_output_dir,
@@ -75,7 +75,7 @@ class TestScanMeteoDaysQuick:
         empty_gfs_dir.mkdir()
 
         phase = BuildMeteoPhase(
-            bbox=(45.0, 47.0, 13.0, 15.0),
+            bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
             gfs_dir=empty_gfs_dir,
             cells_latlon=sample_cells_latlon,
             out_dir=temp_output_dir,
@@ -119,7 +119,7 @@ class TestAutoDetectionNewDays:
             with patch.object(BuildMeteoPhase, '_build_meteo_params') as mock_params:
                 mock_params.return_value = meteo_params
                 phase = BuildMeteoPhase(
-                    bbox=(45.0, 47.0, 13.0, 15.0),
+                    bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
                     gfs_dir=temp_gfs_dir,
                     cells_latlon=sample_cells_latlon,
                     out_dir=temp_output_dir,
@@ -165,7 +165,7 @@ class TestAutoDetectionNewDays:
             with patch.object(BuildMeteoPhase, '_build_meteo_params') as mock_params:
                 mock_params.return_value = meteo_params
                 phase = BuildMeteoPhase(
-                    bbox=(45.0, 47.0, 13.0, 15.0),
+                    bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
                     gfs_dir=temp_gfs_dir,
                     cells_latlon=sample_cells_latlon,
                     out_dir=temp_output_dir,
@@ -202,7 +202,7 @@ class TestAutoDetectionNewDays:
             with patch.object(BuildMeteoPhase, '_build_meteo_params') as mock_params:
                 mock_params.return_value = meteo_params
                 phase = BuildMeteoPhase(
-                    bbox=(45.0, 47.0, 13.0, 15.0),
+                    bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
                     gfs_dir=temp_gfs_dir,
                     cells_latlon=sample_cells_latlon,
                     out_dir=temp_output_dir,
@@ -236,7 +236,7 @@ class TestScanMeteoDaysDetailed:
             grb_file.write_bytes(b"fake grib content")
 
         phase = BuildMeteoPhase(
-            bbox=(45.0, 47.0, 13.0, 15.0),
+            bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
             gfs_dir=temp_gfs_dir,
             cells_latlon=sample_cells_latlon,
             out_dir=temp_output_dir,
@@ -265,7 +265,7 @@ class TestScanMeteoDaysDetailed:
                     grb_file.write_bytes(b"fake grib content")
 
         phase = BuildMeteoPhase(
-            bbox=(45.0, 47.0, 13.0, 15.0),
+            bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
             gfs_dir=temp_gfs_dir,
             cells_latlon=sample_cells_latlon,
             out_dir=temp_output_dir,
@@ -316,7 +316,7 @@ class TestAutoDetectionIntegration:
             with patch.object(BuildMeteoPhase, '_build_meteo_params') as mock_params:
                 mock_params.return_value = meteo_params
                 phase = BuildMeteoPhase(
-                    bbox=(45.0, 47.0, 13.0, 15.0),
+                    bbox=(13.0, 45.0, 15.0, 47.0),  # lon_min,lat_min,lon_max,lat_max following GeoJSON RFC 7946
                     gfs_dir=temp_gfs_dir,
                     cells_latlon=sample_cells_latlon,
                     out_dir=temp_output_dir,

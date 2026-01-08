@@ -141,7 +141,7 @@ class Forecaster:
         Args:
             grib_files: List of GRIB files (6h, 12h, 18h forecasts)
             target_date: Target date for forecast
-            bbox: Bounding box (lat_min, lat_max, lon_min, lon_max)
+            bbox: Bounding box following GeoJSON RFC 7946 (lon_min, lat_min, lon_max, lat_max)
 
         Returns:
             Dictionary with forecast results
@@ -298,7 +298,7 @@ class Forecaster:
         """Format CELLS prediction results into output dictionary."""
         results = {
             "date": target_date.isoformat(),
-            "bbox": {"lat_min": bbox[0], "lat_max": bbox[1], "lon_min": bbox[2], "lon_max": bbox[3]},
+            "bbox": {"lon_min": bbox[0], "lat_min": bbox[1], "lon_max": bbox[2], "lat_max": bbox[3]},
             "model_type": "CELLS",
             "predictions": [],
         }
