@@ -65,9 +65,10 @@ class BuildCellsPhase:
         lat_min, lat_max, lon_min, lon_max = self.bbox
 
         # Generate 1x1 degree cells
+        # Note: bbox defines cell centers, so 45,46,12,13 creates 1 cell at (45,12)
         cells_latlon = []
-        for lat in range(int(lat_min), int(lat_max) + 1):
-            for lon in range(int(lon_min), int(lon_max) + 1):
+        for lat in range(int(lat_min), int(lat_max)):
+            for lon in range(int(lon_min), int(lon_max)):
                 cells_latlon.append((float(lat), float(lon)))
 
         nb_cells = len(cells_latlon)

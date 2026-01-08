@@ -1288,6 +1288,7 @@ def build_dataset(
     output_dir: str = typer.Option(None, "--output-dir", "-o", help="Output directory for PKL files"),
     bbox: str = typer.Option(None, "--bbox", "-b", help="Bounding box: lat_min,lat_max,lon_min,lon_max"),
     min_flights: int = typer.Option(200, "--min-flights", help="Minimum flights per spot"),
+    min_cells: int = typer.Option(None, "--min-cells", help="Minimum flights per cell for training (0=no filter, default from .env)"),
     no_flights: bool = typer.Option(False, "--no-flights", help="Skip flight data processing"),
     force: bool = typer.Option(False, "--force", help="Force rebuild even if PKL files exist"),
     analyze: bool = typer.Option(False, "--analyze", "-a", help="Run analysis and show recommendations after build"),
@@ -1377,11 +1378,16 @@ def build_dataset(
         elevation_dir=settings.elevation_dir,
     )
 
+    # Get min_flights_per_cell from CLI or settings
+    if min_cells is None:
+        min_cells = settings.min_flights_per_cell
+
     # CRITICAL FIX: Build dataset for ALL date ranges at once
     # This fixes the sequential overwrite bug where each range was overwriting previous data
     stats = builder.build_all(
         date_ranges=date_ranges,
         min_flights_per_spot=min_flights,
+        min_flights_per_cell=min_cells,
         include_flights=not no_flights,
         cluster_distance_km=settings.spot_cluster_distance_km,
         num_workers=settings.workers,

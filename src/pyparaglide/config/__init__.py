@@ -122,6 +122,9 @@ class Settings(BaseSettings):
     # Minimum number of flights required per spot for training
     min_flights_per_spot: int = 200
 
+    # Minimum number of flights required per cell for training (0 = no filtering)
+    min_flights_per_cell: int = 20
+
     # Spot clustering radius in kilometers (0 = disabled)
     spot_cluster_distance_km: float = 2.0
 
