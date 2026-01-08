@@ -156,4 +156,5 @@ class BuildTerrainPhase:
         lon_min = max(-180, min(180, lon_min))
         lon_max = max(-180, min(180, lon_max))
 
-        return (lat_min, lat_max, lon_min, lon_max)
+        # Return in GeoJSON RFC 7946 format (lon_min, lat_min, lon_max, lat_max)
+        return (lon_min, lat_min, lon_max, lat_max)

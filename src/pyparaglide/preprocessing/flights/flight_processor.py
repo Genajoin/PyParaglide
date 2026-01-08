@@ -265,9 +265,9 @@ def cluster_nearby_spots(spots: Dict[str, Dict],
 
 
 def is_within_bbox(lat: float, lon: float, bbox: Tuple[float, float, float, float]) -> bool:
-    """Check if coordinates are within bounding box."""
-    lat_min, lat_max, lon_min, lon_max = bbox
-    return lat_min <= lat < lat_max and lon_min <= lon < lon_max
+    """Check if coordinates are within bounding box (bbox format: lon_min, lat_min, lon_max, lat_max following GeoJSON RFC 7946)."""
+    lon_min, lat_min, lon_max, lat_max = bbox
+    return lon_min <= lon < lon_max and lat_min <= lat < lat_max
 
 
 def _is_date_in_ranges(target_date: date, ranges: List[Tuple[date, date]]) -> bool:

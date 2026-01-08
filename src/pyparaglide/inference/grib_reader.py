@@ -101,7 +101,7 @@ class GribReader:
 
         Args:
             name: Parameter name (e.g., 'Temperature', 'U component of wind')
-            bbox: (lat_min, lat_max, lon_min, lon_max)
+            bbox: (lon_min, lat_min, lon_max, lat_max) following GeoJSON RFC 7946
             level: Pressure level in hPa
             type_of_level: Type of level ('isobaricInhPa' for pressure levels)
 
@@ -118,8 +118,8 @@ class GribReader:
         if data is None:
             return None
 
-        # Find indices for bbox
-        lat_min, lat_max, lon_min, lon_max = bbox
+        # Find indices for bbox (following GeoJSON RFC 7946)
+        lon_min, lat_min, lon_max, lat_max = bbox
 
         # Handle longitude wrapping
         if lon_min < 0:

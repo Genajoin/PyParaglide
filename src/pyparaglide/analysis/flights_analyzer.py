@@ -67,7 +67,7 @@ class FlightAnalyzer:
         """
         Args:
             flights_dir: Directory with xContest JSON files
-            bbox: Optional filter (lat_min, lat_max, lon_min, lon_max)
+            bbox: Optional bounding box in GeoJSON RFC 7946 format (lon_min, lat_min, lon_max, lat_max)
         """
         self.flights_dir = Path(flights_dir)
         self.bbox = bbox
@@ -269,8 +269,8 @@ class FlightAnalyzer:
 
             # Check bbox (only if specified)
             if self.bbox:
-                lat_min, lat_max, lon_min, lon_max = self.bbox
-                if lat_min <= lat < lat_max and lon_min <= lon < lon_max:
+                lon_min, lat_min, lon_max, lat_max = self.bbox
+                if lon_min <= lon < lon_max and lat_min <= lat < lat_max:
                     inside_bbox += 1
                 else:
                     outside_bbox += 1

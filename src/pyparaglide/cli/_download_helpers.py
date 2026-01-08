@@ -116,7 +116,7 @@ def download_elevation_impl(data_dir: str | None, bbox: str | None) -> None:
 
     Args:
         data_dir: Output directory for elevation files
-        bbox: Bounding box string (lat_min,lat_max,lon_min,lon_max)
+        bbox: Bounding box string in GeoJSON format (lon_min,lat_min,lon_max,lat_max)
     """
     settings = get_settings()
 
@@ -132,7 +132,7 @@ def download_elevation_impl(data_dir: str | None, bbox: str | None) -> None:
         parts = [float(x.strip()) for x in bbox.split(",")]
         if len(parts) != 4:
             console.print(f"[red]Invalid bbox format: {bbox}[/red]")
-            console.print("Expected: lat_min,lat_max,lon_min,lon_max")
+            console.print("Expected: lon_min,lat_min,lon_max,lat_max (GeoJSON format)")
             raise typer.Exit(1)
         bbox_tuple = (parts[0], parts[1], parts[2], parts[3])
 

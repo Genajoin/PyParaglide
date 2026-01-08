@@ -50,13 +50,13 @@ class DatasetBuilder:
             gfs_dir: Directory containing GFS GRIB files
             flights_dir: Directory containing xContest JSON files
             output_dir: Output directory for PKL files
-            bbox: Bounding box (lat_min, lat_max, lon_min, lon_max)
+            bbox: Bounding box following GeoJSON RFC 7946 (lon_min, lat_min, lon_max, lat_max)
             elevation_dir: Directory containing elevation tiles
         """
         self.gfs_dir = Path(gfs_dir)
         self.flights_dir = Path(flights_dir)
         self.output_dir = Path(output_dir)
-        self.bbox = bbox or (45.0, 47.0, 13.0, 15.0)  # Alps region
+        self.bbox = bbox or (13.0, 45.0, 15.0, 47.0)  # Alps region (following GeoJSON RFC 7946)
         self.elevation_dir = Path(elevation_dir) if elevation_dir else None
 
         self.output_dir.mkdir(parents=True, exist_ok=True)

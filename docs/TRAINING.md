@@ -32,8 +32,8 @@ Set your training parameters in `.env`:
 # Training dates (multiple seasons recommended)
 PYPARAGLIDE_TRAINING_DATES=2024-06-01:2024-08-31,2025-06-01:2025-08-31
 
-# Bounding box (Alps example)
-PYPARAGLIDE_BBOX=45,47,13,15
+# Bounding box following GeoJSON RFC 7946 (Alps example: lon_min,lat_min,lon_max,lat_max)
+PYPARAGLIDE_BBOX=13,45,15,47
 
 # Data directories
 PYPARAGLIDE_PKL_DIR=data/pkl
