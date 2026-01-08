@@ -452,9 +452,11 @@ class BuildMeteoPhase:
                 file_queue.put((day_date, hour))
 
         # Start reader thread
+        # CRITICAL FIX: Always pass True for include_grib_path to enable cache
+        # grib_path must be passed to workers for per-cell cache lookup to work
         reader = threading.Thread(
             target=file_reader,
-            args=(file_queue, job_queue, str(self.gfs_dir), stop_event, self.use_cache),
+            args=(file_queue, job_queue, str(self.gfs_dir), stop_event, True),
             daemon=True
         )
         reader.start()
